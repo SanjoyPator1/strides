@@ -32,7 +32,7 @@ export async function runDevCommand(cwd: string = process.cwd()): Promise<void> 
     }
   }
 
-  const next = spawn('next', ['dev', '--port', String(nextPort)], {
+  const next = spawn('next', ['dev', '--port', String(nextPort), '--hostname', 'localhost'], {
     cwd,
     stdio: 'inherit',
     env: {
