@@ -31,14 +31,14 @@ Tracks progress against [04-mvp-implementation-plan](04-mvp-implementation-plan.
 - [x] Wire into theme + example (pyproject.toml/uv.lock, first cell on welcome page)
 - [x] Verify: spec §8 steps 3–5 pass
 
-### Phase 3 — Viz + real chapter — `not started`
+### Phase 3 — Viz + real chapter — `done`
 
-- [ ] Color utilities + scales
-- [ ] `Matrix`
-- [ ] `Scene` / `Step` — includes the `layoutId`-across-SVG spike
-- [ ] `AttentionHeatmap`
-- [ ] Attention chapter authored, snapshotted, committed
-- [ ] Verify: spec §8 step 6 passes
+- [x] Color utilities + scales
+- [x] `Matrix`
+- [x] `Scene` / `Step` — includes the `layoutId`-across-SVG spike
+- [x] `AttentionHeatmap`
+- [x] Attention chapter authored, snapshotted, committed
+- [x] Verify: spec §8 step 6 passes
 
 ### Phase 4 — Hardening + wrap-up — `not started`
 
@@ -67,3 +67,9 @@ Record anything done differently from docs 02–04, with reasoning. Blocked item
 | 2026-07-16 | 2 | `@strides/runtime` gained a second subpath export, `@strides/runtime/node` (content-scan/snapshot/kernel-client utilities, no React), for the same reason as `@strides/theme/config` in Phase 1: `@strides/cli` loads modules directly via `jiti` (never bundled), and importing the full barrel pulled in `.tsx` component files whose JSX `jiti`'s loader couldn't parse in that context. |
 | 2026-07-16 | 2 | Snapshot executor: on a per-cell timeout it records a synthetic `TimeoutError` output for that cell, marks the page `hasErrors`, and stops running further cells on that page (the kernel may be wedged) rather than interrupting the kernel and continuing. A deliberate MVP-scope simplification; not specified either way by spec §4. |
 | 2026-07-16 | 2 | No browser-automation tool (Playwright, screenshots, etc.) is available in this environment, so the live "Dev, kernel reachable" Run/Restart interaction (spec §8 step 3) wasn't clicked through in an actual browser. Verified instead by: (a) a Node script running the welcome page's exact cell code through `StridesKernelClient` against the same gateway `strides dev` spawned, confirming outputs match the output model; (b) inspecting server-rendered HTML/CSS for all three `PyCell` modes (published, dev-with-snapshot, stale-badge-after-edit); (c) confirming `strides dev`'s SIGTERM cleanup kills both child processes. The client-side state-machine transitions (queued→running→ok, live streaming, restart button) are implemented and code-reviewed but not interactively verified — recommend a manual click-through before relying on it. |
+| 2026-07-16 | 3 | Color scale (`useColorScale`): resolves the theme's `--strides-viz-*` CSS custom properties via `getComputedStyle` + a `MutationObserver` on `<html>`'s class attribute, then feeds the resolved hex strings into `d3.scaleSequential`/`d3.scaleDiverging` (`d3-interpolate`'s `interpolateRgb`/`piecewise`). This is a small amount of bridging JS, not the literal "no JS" wording in doc 02/03 — but architecture doc 02 explicitly mandates d3-scale/d3-interpolate as viz's math tools, which need actual resolved color values, not CSS `var()` references. A pure-CSS `color-mix()` alternative was considered and rejected as needlessly clever for MVP. |
+| 2026-07-16 | 3 | `Matrix`'s `layoutId` (from its `id` prop) is applied **per cell** (`${id}-cell-{row}-{col}`), not once on the whole matrix — needed so that when Scene swaps one mounted `<Matrix id="A">` for a different one with the same id, each cell's *fill color* crossfades via Framer Motion's shared-layout mechanism, not just its position. Matches the Phase 3 verify line "same-id matrices tween, not remount." |
+| 2026-07-16 | 3 | No browser-automation tool was available to click through Scene's prev/next/dots/keyboard/autoplay or AttentionHeatmap's hover, same limitation as Phase 2. Added real `jsdom` + `@testing-library/react` behavioral tests (not just code review) covering: step advance/wraparound, dot navigation, arrow-key handling, autoplay-then-pause-on-interaction (`Scene.test.tsx`, 6 tests), and hover → tooltip/row-sum/row-highlight (`AttentionHeatmap.test.tsx`, 3 tests). Visual smoothness of the actual tween animation still wasn't observed — recommend a manual look before relying on it. |
+| 2026-07-16 | 3 | The attention chapter's toy example uses `torch.randn(...) * 0.3` (scaled-down) projections with `torch.manual_seed(7)`, not raw unscaled `randn`. An unscaled version produced a near one-hot attention distribution (all weight on a single token per row) — technically correct but a poor illustration of "soft" attention. Scaling down is a standard toy-example technique for a legible distribution; noted since spec §7 doesn't specify exact numbers, only the shape of the computation. |
+| 2026-07-16 | 3 | Closed out Phase 2's open item: added a `matplotlib` cell (`imshow` of the attention weights) to the attention chapter specifically to exercise the image-output pipeline end-to-end for the first time. Confirmed working: PNG written to `snapshots/assets/attention/01-attention-weights/5-0.png`, mirrored to `public/_strides/assets/...` by `strides build`, and served with `Content-Type: image/png` in a production `next start`. |
+| 2026-07-16 | 3 | Found and fixed a real `.gitignore` bug while verifying the above: `public/_strides/` is anchored to the repo root by git's ignore-pattern rules (any pattern containing a non-trailing `/` is anchored to the `.gitignore`'s location), so it silently failed to match `examples/dl-notes/public/_strides/` and the generated PNG copy showed up as untracked. Fixed to `**/public/_strides/`. Worth double-checking any other nested-package gitignore patterns added later for the same anchoring mistake. |
