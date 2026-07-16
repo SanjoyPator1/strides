@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "page": "getting-started/01-welcome",
+  "generatedAt": "2026-07-16T10:42:20.285Z",
+  "environment": {
+    "python": "3.12.13",
+    "platform": "macOS-15.5-arm64-arm-64bit",
+    "gpu": "Apple M1 (mps)",
+    "packages": {
+      "torch": "2.13.0"
+    }
+  },
+  "hasErrors": false,
+  "cells": [
+    {
+      "index": 0,
+      "codeHash": "sha256:3507e8412a40491d5bdf4e8d4c25f8887e90d413573771d75ea42dfee9acd347",
+      "durationMs": 15,
+      "outputs": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "hello from a strides cell, running Python 3.12.13\n"
+        },
+        {
+          "type": "execute_result",
+          "data": {
+            "text/plain": "42"
+          }
+        }
+      ]
+    }
+  ]
+}

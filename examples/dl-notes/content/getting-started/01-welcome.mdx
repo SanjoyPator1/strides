@@ -21,7 +21,7 @@ $$
 | --------------------- | -------------------- |
 | MDX pages              | done                 |
 | Dark mode              | done                 |
-| Python cells           | coming in Phase 2    |
+| Python cells           | done                 |
 | Interactive diagrams   | coming in Phase 3    |
 
 ## Static code
@@ -33,4 +33,15 @@ def softmax(x):
     return [v / total for v in exps]
 ```
 
-This block is never executed — it's just highlighted for reading. Executable cells arrive in Phase 2.
+This block is never executed — it's just highlighted for reading.
+
+## A live cell
+
+This one runs for real, against your local Python environment:
+
+```python cell
+import platform
+
+print(f"hello from a strides cell, running Python {platform.python_version()}")
+6 * 7
+```
