@@ -6,11 +6,11 @@ Tracks progress against [04-mvp-implementation-plan](04-mvp-implementation-plan.
 
 ## Phase progress
 
-### Phase 0 — Workspace scaffold — `not started`
+### Phase 0 — Workspace scaffold — `done`
 
-- [ ] Root workspace files (package.json, pnpm-workspace.yaml, tsconfig.base.json, .gitignore, LICENSE, README stub)
-- [ ] Package skeletons for theme / runtime / viz / viz-ml / cli
-- [ ] Verify: `pnpm install` + `pnpm -r exec tsc --noEmit` pass
+- [x] Root workspace files (package.json, pnpm-workspace.yaml, tsconfig.base.json, .gitignore, LICENSE, README stub)
+- [x] Package skeletons for theme / runtime / viz / viz-ml / cli
+- [x] Verify: `pnpm install` + `pnpm -r exec tsc --noEmit` pass
 
 ### Phase 1 — Theme + example site — `not started`
 
@@ -53,4 +53,5 @@ Record anything done differently from docs 02–04, with reasoning. Blocked item
 
 | Date | Phase | What changed and why |
 |------|-------|----------------------|
-| — | — | — |
+| 2026-07-16 | 0 | pnpm wasn't preinstalled; enabled via `corepack enable pnpm` (Node ships corepack). No plan change, noted for fresh-clone reproducibility. |
+| 2026-07-16 | 0 | `typescript` pinned to `^7.0.2` (npm `latest` tag) per doc 04's "prefer latest stable" rule — this is TypeScript's native/Go-ported major version, a bigger jump than the 5.x line the docs were written against. Flagging in case later phases hit ecosystem tooling (ts-node, ESLint plugins, etc.) that hasn't caught up yet. |
