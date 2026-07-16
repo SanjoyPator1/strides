@@ -1,0 +1,36 @@
+---
+title: Welcome
+description: A kitchen-sink tour of what strides pages can do.
+---
+
+strides lets you combine **prose**, math, code, and interactive diagrams on one page.
+
+## Math
+
+Inline math: $e^{i\pi} + 1 = 0$.
+
+Block math:
+
+$$
+\text{softmax}(x)_i = \frac{e^{x_i}}{\sum_j e^{x_j}}
+$$
+
+## A table
+
+| Feature               | Status              |
+| --------------------- | -------------------- |
+| MDX pages              | done                 |
+| Dark mode              | done                 |
+| Python cells           | coming in Phase 2    |
+| Interactive diagrams   | coming in Phase 3    |
+
+## Static code
+
+```python
+def softmax(x):
+    exps = [v.exp() for v in x]
+    total = sum(exps)
+    return [v / total for v in exps]
+```
+
+This block is never executed — it's just highlighted for reading. Executable cells arrive in Phase 2.
