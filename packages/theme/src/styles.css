@@ -270,6 +270,14 @@ a {
   padding: 0.5rem 0.75rem;
 }
 
+/* Outputs should read like plain text under a Jupyter cell, not a nested card —
+   override the general .strides-page pre styling (meant for static code fences). */
+.strides-page .strides-py-cell-outputs pre {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
 .strides-py-cell-note {
   color: var(--strides-color-muted);
   font-size: 0.8rem;
