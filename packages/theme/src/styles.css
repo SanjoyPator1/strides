@@ -1,0 +1,214 @@
+:root {
+  --strides-color-bg: #ffffff;
+  --strides-color-fg: #1a1a1a;
+  --strides-color-muted: #6b7280;
+  --strides-color-border: #e5e7eb;
+  --strides-color-accent: #2563eb;
+  --strides-color-surface: #f9fafb;
+  --strides-font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --strides-font-mono:
+    'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --strides-sidebar-width: 260px;
+  --strides-header-height: 56px;
+  --strides-content-width: 72ch;
+}
+
+.dark {
+  --strides-color-bg: #0f1115;
+  --strides-color-fg: #e5e7eb;
+  --strides-color-muted: #9ca3af;
+  --strides-color-border: #262b33;
+  --strides-color-accent: #60a5fa;
+  --strides-color-surface: #171a21;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--strides-color-bg);
+  color: var(--strides-color-fg);
+  font-family: var(--strides-font-sans);
+  line-height: 1.6;
+}
+
+a {
+  color: var(--strides-color-accent);
+}
+
+.strides-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.strides-header {
+  height: var(--strides-header-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--strides-color-border);
+  position: sticky;
+  top: 0;
+  background: var(--strides-color-bg);
+  z-index: 10;
+}
+
+.strides-title {
+  font-weight: 600;
+  flex: 1;
+}
+
+.strides-sidebar-toggle {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--strides-color-fg);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.strides-theme-toggle {
+  background: none;
+  border: 1px solid var(--strides-color-border);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  color: var(--strides-color-fg);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.strides-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.strides-sidebar {
+  width: var(--strides-sidebar-width);
+  flex-shrink: 0;
+  border-right: 1px solid var(--strides-color-border);
+  padding: 1.5rem 1rem;
+  overflow-y: auto;
+}
+
+.strides-sidebar-section {
+  margin-bottom: 1.25rem;
+}
+
+.strides-sidebar-section-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--strides-color-muted);
+  margin-bottom: 0.5rem;
+}
+
+.strides-sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.strides-sidebar-link {
+  display: block;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  color: var(--strides-color-fg);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.strides-sidebar-link:hover {
+  background: var(--strides-color-surface);
+}
+
+.strides-sidebar-link--active {
+  background: var(--strides-color-surface);
+  color: var(--strides-color-accent);
+  font-weight: 600;
+}
+
+.strides-content {
+  flex: 1;
+  min-width: 0;
+  padding: 2rem;
+  display: flex;
+  justify-content: center;
+}
+
+.strides-page {
+  width: 100%;
+  max-width: var(--strides-content-width);
+}
+
+.strides-page pre {
+  overflow-x: auto;
+  padding: 1rem;
+  border-radius: 8px;
+  background: var(--strides-color-surface);
+  font-size: 0.875rem;
+}
+
+.strides-page code {
+  font-family: var(--strides-font-mono);
+}
+
+.strides-page table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.strides-page th,
+.strides-page td {
+  border: 1px solid var(--strides-color-border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+/* rehype-pretty-code dual-theme: it inlines --shiki-light/--shiki-dark custom
+   properties per token and defaults to the light values; flip to the dark
+   ones when the site is in dark mode. */
+.dark .strides-page pre[data-theme] span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+}
+
+@media (max-width: 767px) {
+  .strides-sidebar-toggle {
+    display: inline-flex;
+  }
+
+  .strides-sidebar {
+    position: fixed;
+    top: var(--strides-header-height);
+    left: 0;
+    bottom: 0;
+    background: var(--strides-color-bg);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 20;
+  }
+
+  .strides-sidebar--open {
+    transform: translateX(0);
+  }
+
+  .strides-content {
+    padding: 1.25rem;
+  }
+}
