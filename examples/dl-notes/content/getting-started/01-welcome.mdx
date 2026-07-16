@@ -22,7 +22,7 @@ $$
 | MDX pages              | done                 |
 | Dark mode              | done                 |
 | Python cells           | done                 |
-| Interactive diagrams   | coming in Phase 3    |
+| Interactive diagrams   | done                 |
 
 ## Static code
 
@@ -45,3 +45,18 @@ import platform
 print(f"hello from a strides cell, running Python {platform.python_version()}")
 6 * 7
 ```
+
+## An interactive diagram
+
+Hover a cell — this `<Matrix>` is the same primitive the attention chapter builds on:
+
+<Matrix
+  values={[
+    [1, 0, 2],
+    [0, 3, 1],
+    [2, 1, 0],
+  ]}
+  rowLabels={['a', 'b', 'c']}
+  colLabels={['x', 'y', 'z']}
+  colorScale="sequential"
+/>

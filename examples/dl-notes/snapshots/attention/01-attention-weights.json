@@ -1,7 +1,7 @@
 {
   "version": 1,
   "page": "attention/01-attention-weights",
-  "generatedAt": "2026-07-16T11:03:41.145Z",
+  "generatedAt": "2026-07-16T11:48:56.744Z",
   "environment": {
     "python": "3.12.13",
     "platform": "macOS-15.5-arm64-arm-64bit",
@@ -15,7 +15,7 @@
     {
       "index": 0,
       "codeHash": "sha256:035bd2991b2d40c73fd8a1ad212433497ef9d072dab32335b2ab0091cd7f6104",
-      "durationMs": 6,
+      "durationMs": 10,
       "outputs": [
         {
           "type": "stream",
@@ -27,7 +27,7 @@
     {
       "index": 1,
       "codeHash": "sha256:737fa47c1f5fa01e86a038c7ce03caa4ab7c4717c1f9891052fed05438c8ae48",
-      "durationMs": 12,
+      "durationMs": 13,
       "outputs": [
         {
           "type": "stream",
@@ -39,7 +39,7 @@
     {
       "index": 2,
       "codeHash": "sha256:909b19d8e0e43e251186d2fd50c5ac3a1b79feae4f37810fbf65bcd0ec0f466e",
-      "durationMs": 22,
+      "durationMs": 20,
       "outputs": [
         {
           "type": "stream",
@@ -51,7 +51,7 @@
     {
       "index": 3,
       "codeHash": "sha256:4ec6bc7c67dbadfbe07bdaa631726bbc53da2510c85cf4b3399e365a6d1e093e",
-      "durationMs": 7,
+      "durationMs": 6,
       "outputs": [
         {
           "type": "stream",
@@ -63,7 +63,7 @@
     {
       "index": 4,
       "codeHash": "sha256:7dc45046f75a1ed0c8bebefdf675354df1d232ee689ea2ee58da9c8ea3b20750",
-      "durationMs": 6,
+      "durationMs": 5,
       "outputs": [
         {
           "type": "stream",
@@ -75,7 +75,7 @@
     {
       "index": 5,
       "codeHash": "sha256:f2a1fbdaa45a6cafc040139fa2c393017148c0d6d58cac76b8770e714c3aa45c",
-      "durationMs": 107,
+      "durationMs": 83,
       "outputs": [
         {
           "type": "display_data",
