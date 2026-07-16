@@ -1,0 +1,152 @@
+---
+title: Attention weights
+description: A minimal, real self-attention computation, stepped through the causal mask and visualized as a heatmap.
+---
+
+Self-attention lets every token look at every other token and decide, per pair, how much
+to pay attention to it. Here we compute it for real, on a 6-token toy sentence, and watch
+the causal mask turn "every token sees everything" into "every token sees only what came
+before it."
+
+## Setup
+
+```python cell
+import math
+import torch
+
+torch.manual_seed(7)
+
+tokens = ["The", "cat", "sat", "on", "the", "mat"]
+d_model = 8
+n = len(tokens)
+print(f"{n} tokens, d_model={d_model}")
+```
+
+Random (but seeded, for reproducible snapshots) token embeddings and query/key/value projections:
+
+```python cell
+X = torch.randn(n, d_model) * 0.3
+W_q = torch.randn(d_model, d_model) * 0.3
+W_k = torch.randn(d_model, d_model) * 0.3
+W_v = torch.randn(d_model, d_model) * 0.3
+
+Q = X @ W_q
+K = X @ W_k
+V = X @ W_v
+print("Q, K, V shape:", tuple(Q.shape))
+```
+
+## Raw scores
+
+Scaled dot-product attention scores — how much each query token resonates with each key token,
+before any masking:
+
+```python cell
+raw_scores = (Q @ K.T) / math.sqrt(d_model)
+print(raw_scores.round(decimals=2))
+```
+
+## The causal mask
+
+A language model shouldn't let a token attend to positions after it. We build a boolean mask
+for the upper triangle (excluding the diagonal) and fill those positions with $-\infty$ before
+the softmax, so they vanish (become exactly 0) once normalized:
+
+```python cell
+mask = torch.triu(torch.ones(n, n), diagonal=1).bool()
+masked_scores = raw_scores.masked_fill(mask, float("-inf"))
+print(masked_scores.round(decimals=2))
+```
+
+## Softmax
+
+$$
+\text{softmax}(x)_i = \frac{e^{x_i}}{\sum_j e^{x_j}}
+$$
+
+```python cell
+weights = torch.softmax(masked_scores, dim=-1)
+print(weights.round(decimals=2))
+print("row sums:", weights.sum(dim=-1).round(decimals=4))
+```
+
+A quick matplotlib sanity check of the same matrix — a static counterpart to the interactive
+heatmap below:
+
+```python cell
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(4, 4))
+im = ax.imshow(weights.numpy(), cmap="Blues")
+ax.set_xticks(range(n), tokens, rotation=45, ha="right")
+ax.set_yticks(range(n), tokens)
+ax.set_title("Attention weights")
+fig.colorbar(im, fraction=0.046, pad=0.04)
+fig.tight_layout()
+plt.show()
+```
+
+## Stepping through it
+
+The four cells above collapse into four snapshots of the same 6×6 grid. Step through them —
+notice the grid itself never remounts, only the numbers and colors tween:
+
+export const tokens = ["The", "cat", "sat", "on", "the", "mat"]
+
+export const rawScores = [
+  [-0.05, 0.02, 0.05, -0.06, 0.04, -0.03],
+  [-0.01, 0.04, -0.14, 0.08, -0.05, -0.03],
+  [-0.01, 0.02, 0.01, -0.02, 0.01, -0.02],
+  [-0.02, -0.03, 0.08, -0.04, 0.05, -0.01],
+  [0.02, 0.0, -0.04, 0.02, -0.01, 0.0],
+  [0.0, -0.01, 0.14, -0.09, 0.04, 0.02],
+]
+
+export const maskIndicator = [
+  [0, 1, 1, 1, 1, 1],
+  [0, 0, 1, 1, 1, 1],
+  [0, 0, 0, 1, 1, 1],
+  [0, 0, 0, 0, 1, 1],
+  [0, 0, 0, 0, 0, 1],
+  [0, 0, 0, 0, 0, 0],
+]
+
+export const maskedScores = [
+  [-0.05, -1, -1, -1, -1, -1],
+  [-0.01, 0.04, -1, -1, -1, -1],
+  [-0.01, 0.02, 0.01, -1, -1, -1],
+  [-0.02, -0.03, 0.08, -0.04, -1, -1],
+  [0.02, 0.0, -0.04, 0.02, -0.01, -1],
+  [0.0, -0.01, 0.14, -0.09, 0.04, 0.02],
+]
+
+export const weights = [
+  [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  [0.49, 0.51, 0.0, 0.0, 0.0, 0.0],
+  [0.33, 0.34, 0.33, 0.0, 0.0, 0.0],
+  [0.25, 0.24, 0.27, 0.24, 0.0, 0.0],
+  [0.2, 0.2, 0.19, 0.21, 0.2, 0.0],
+  [0.16, 0.16, 0.19, 0.15, 0.17, 0.17],
+]
+
+<Scene autoPlayMs={2500}>
+  <Step caption="Raw attention scores — every token sees every token">
+    <Matrix id="A" values={rawScores} rowLabels={tokens} colLabels={tokens} colorScale="diverging" />
+  </Step>
+  <Step caption="Causal mask: 1 marks a future position that must be hidden">
+    <Matrix id="A" values={maskIndicator} rowLabels={tokens} colLabels={tokens} colorScale="sequential" precision={0} />
+  </Step>
+  <Step caption="Masked positions filled with −∞ (shown here as −1 so the grid stays finite)">
+    <Matrix id="A" values={maskedScores} rowLabels={tokens} colLabels={tokens} colorScale="diverging" />
+  </Step>
+  <Step caption="Softmax: each row becomes a probability distribution over allowed positions">
+    <Matrix id="A" values={weights} rowLabels={tokens} colLabels={tokens} colorScale="sequential" />
+  </Step>
+</Scene>
+
+## Final attention weights
+
+Hover a cell to see exactly how much a query token attends to a key token, and confirm every
+row sums to 1 — softmax's whole job:
+
+<AttentionHeatmap weights={weights} tokens={tokens} />

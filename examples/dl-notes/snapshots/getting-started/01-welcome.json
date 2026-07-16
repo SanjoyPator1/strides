@@ -1,7 +1,7 @@
 {
   "version": 1,
   "page": "getting-started/01-welcome",
-  "generatedAt": "2026-07-16T10:42:20.285Z",
+  "generatedAt": "2026-07-16T11:03:43.471Z",
   "environment": {
     "python": "3.12.13",
     "platform": "macOS-15.5-arm64-arm-64bit",
@@ -15,7 +15,7 @@
     {
       "index": 0,
       "codeHash": "sha256:3507e8412a40491d5bdf4e8d4c25f8887e90d413573771d75ea42dfee9acd347",
-      "durationMs": 15,
+      "durationMs": 5,
       "outputs": [
         {
           "type": "stream",
