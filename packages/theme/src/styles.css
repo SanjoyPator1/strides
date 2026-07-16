@@ -12,6 +12,11 @@
   --strides-sidebar-width: 260px;
   --strides-header-height: 56px;
   --strides-content-width: 72ch;
+  --strides-viz-sequential-low: #eff6ff;
+  --strides-viz-sequential-high: #1d4ed8;
+  --strides-viz-diverging-low: #dc2626;
+  --strides-viz-diverging-mid: #f1f5f9;
+  --strides-viz-diverging-high: #1d4ed8;
 }
 
 .dark {
@@ -21,6 +26,11 @@
   --strides-color-border: #262b33;
   --strides-color-accent: #60a5fa;
   --strides-color-surface: #171a21;
+  --strides-viz-sequential-low: #1e293b;
+  --strides-viz-sequential-high: #60a5fa;
+  --strides-viz-diverging-low: #f87171;
+  --strides-viz-diverging-mid: #1e293b;
+  --strides-viz-diverging-high: #60a5fa;
 }
 
 * {
@@ -290,6 +300,114 @@ a {
 
 .strides-cell-output-error {
   color: #b91c1c;
+}
+
+.strides-matrix {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  font-family: var(--strides-font-sans);
+}
+
+.strides-matrix-cell {
+  stroke: var(--strides-color-border);
+  stroke-width: 1;
+}
+
+.strides-matrix-cell--highlight {
+  stroke: var(--strides-color-accent);
+  stroke-width: 2;
+}
+
+.strides-matrix-value {
+  font-size: 0.7rem;
+  fill: var(--strides-color-fg);
+  pointer-events: none;
+  user-select: none;
+}
+
+.strides-matrix-label {
+  font-size: 0.7rem;
+  fill: var(--strides-color-muted);
+}
+
+.strides-scene {
+  margin: 1.5rem 0;
+  outline: none;
+}
+
+.strides-scene-stage {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0;
+}
+
+.strides-scene-caption {
+  text-align: center;
+  color: var(--strides-color-muted);
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}
+
+.strides-scene-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.strides-scene-button {
+  background: none;
+  border: 1px solid var(--strides-color-border);
+  border-radius: 6px;
+  width: 2rem;
+  height: 2rem;
+  cursor: pointer;
+  color: var(--strides-color-fg);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.strides-scene-dots {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.strides-scene-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  border: none;
+  background: var(--strides-color-border);
+  cursor: pointer;
+  padding: 0;
+}
+
+.strides-scene-dot--active {
+  background: var(--strides-color-accent);
+}
+
+.strides-attention-heatmap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+
+.strides-attention-tooltip {
+  min-height: 2.75rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--strides-color-fg);
+}
+
+.strides-attention-tooltip p {
+  margin: 0.15rem 0;
+}
+
+.strides-attention-tooltip-hint {
+  color: var(--strides-color-muted);
 }
 
 @media (max-width: 767px) {

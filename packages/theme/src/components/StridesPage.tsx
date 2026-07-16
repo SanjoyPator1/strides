@@ -9,12 +9,13 @@ import rehypePrettyCode from 'rehype-pretty-code'
 import { remarkCellPlugin, loadPageSnapshot, SnapshotProvider, KernelProvider, KernelStatusBar } from '@strides/runtime'
 import type { StridesConfig } from '../config'
 import { getContentSlugs, loadPage } from '../content'
+import { defaultComponents } from '../default-components'
 
 export interface StridesPageProps {
   /** Page slug, e.g. "getting-started/01-welcome". Undefined for the site root. */
   slug?: string
   config: StridesConfig
-  /** MDX component map. Empty until viz components are registered (Phase 3). */
+  /** MDX component map, merged over the built-in viz components (Matrix, Scene, Step, AttentionHeatmap). */
   components?: MDXComponents
 }
 
@@ -29,7 +30,7 @@ export async function StridesPage({ slug, config, components = {} }: StridesPage
   if (!page) notFound()
 
   const snapshot = loadPageSnapshot(slug, config)
-  const mdxComponents = SnapshotProvider(components, snapshot)
+  const mdxComponents = SnapshotProvider({ ...defaultComponents, ...components }, snapshot)
   const gatewayUrl = process.env.NEXT_PUBLIC_STRIDES_KERNEL_URL
 
   const article = (
