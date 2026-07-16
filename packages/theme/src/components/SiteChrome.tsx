@@ -19,7 +19,7 @@ export function SiteChrome({ title, tree, children }: SiteChromeProps) {
   const pathname = usePathname()
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
       <div className="strides-shell">
         <header className="strides-header">
           <button
