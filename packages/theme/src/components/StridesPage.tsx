@@ -6,6 +6,7 @@ import remarkFrontmatter from 'remark-frontmatter'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import rehypePrettyCode from 'rehype-pretty-code'
+import { remarkCellPlugin, loadPageSnapshot, SnapshotProvider, KernelProvider, KernelStatusBar } from '@strides/runtime'
 import type { StridesConfig } from '../config'
 import { getContentSlugs, loadPage } from '../content'
 
@@ -27,15 +28,20 @@ export async function StridesPage({ slug, config, components = {} }: StridesPage
   const page = loadPage(slug, config)
   if (!page) notFound()
 
-  return (
+  const snapshot = loadPageSnapshot(slug, config)
+  const mdxComponents = SnapshotProvider(components, snapshot)
+  const gatewayUrl = process.env.NEXT_PUBLIC_STRIDES_KERNEL_URL
+
+  const article = (
     <article className="strides-page">
       <h1>{page.frontmatter.title}</h1>
+      {gatewayUrl ? <KernelStatusBar /> : null}
       <MDXRemote
         source={page.content}
-        components={components}
+        components={mdxComponents}
         options={{
           mdxOptions: {
-            remarkPlugins: [remarkGfm, remarkFrontmatter, remarkMath],
+            remarkPlugins: [remarkGfm, remarkFrontmatter, remarkMath, remarkCellPlugin],
             rehypePlugins: [
               rehypeKatex,
               [rehypePrettyCode, { theme: { light: 'github-light', dark: 'github-dark' }, keepBackground: false }],
@@ -45,4 +51,6 @@ export async function StridesPage({ slug, config, components = {} }: StridesPage
       />
     </article>
   )
+
+  return gatewayUrl ? <KernelProvider gatewayUrl={gatewayUrl}>{article}</KernelProvider> : article
 }

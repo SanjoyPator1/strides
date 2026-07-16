@@ -180,12 +180,116 @@ a {
   text-align: left;
 }
 
-/* rehype-pretty-code dual-theme: it inlines --shiki-light/--shiki-dark custom
-   properties per token and defaults to the light values; flip to the dark
-   ones when the site is in dark mode. */
-.dark .strides-page pre[data-theme] span {
-  color: var(--shiki-dark) !important;
-  background-color: var(--shiki-dark-bg) !important;
+/* Shiki dual-theme tokens (from rehype-pretty-code for static fences, and from
+   @strides/runtime's PyCell highlighter for cells): each token declares
+   --shiki-light/--shiki-dark custom properties: apply the light one by
+   default and flip to the dark one when the site is in dark mode. */
+.strides-page [style*='--shiki-light'] {
+  color: var(--shiki-light);
+}
+
+.dark .strides-page [style*='--shiki-light'] {
+  color: var(--shiki-dark);
+}
+
+.strides-kernel-banner {
+  background: var(--strides-color-surface);
+  border: 1px solid var(--strides-color-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--strides-color-muted);
+}
+
+.strides-kernel-statusbar {
+  margin-bottom: 0.5rem;
+}
+
+.strides-kernel-restart {
+  background: none;
+  border: 1px solid var(--strides-color-border);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  color: var(--strides-color-fg);
+  cursor: pointer;
+}
+
+.strides-py-cell {
+  border: 1px solid var(--strides-color-border);
+  border-radius: 8px;
+  margin: 1.25rem 0;
+  overflow: hidden;
+}
+
+.strides-py-cell-code pre {
+  margin: 0;
+  border-radius: 0;
+}
+
+.strides-py-cell-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--strides-color-border);
+  font-size: 0.8rem;
+}
+
+.strides-py-cell-run {
+  background: var(--strides-color-accent);
+  color: var(--strides-color-bg);
+  border: none;
+  border-radius: 6px;
+  padding: 0.25rem 0.65rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.strides-py-cell-run:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.strides-py-cell-state {
+  color: var(--strides-color-muted);
+}
+
+.strides-py-cell-outputs {
+  border-top: 1px solid var(--strides-color-border);
+  padding: 0.5rem 0.75rem;
+}
+
+.strides-py-cell-note {
+  color: var(--strides-color-muted);
+  font-size: 0.8rem;
+  margin: 0 0 0.4rem;
+}
+
+.strides-py-cell-badge {
+  color: #b45309;
+  font-size: 0.8rem;
+  margin: 0 0 0.4rem;
+}
+
+.strides-cell-output {
+  margin: 0.35rem 0;
+}
+
+.strides-cell-output-stream {
+  white-space: pre-wrap;
+  font-family: var(--strides-font-mono);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.strides-cell-output-image {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.strides-cell-output-error {
+  color: #b91c1c;
 }
 
 @media (max-width: 767px) {
