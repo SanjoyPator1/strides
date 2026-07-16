@@ -1,8 +1,12 @@
+/**
+ * Node-only entry point: content/snapshot utilities with no React/JSX, safe for
+ * @strides/cli (a plain Node process, never bundled) to import without pulling
+ * in the component tree.
+ */
 export type { CellOutput, CellState } from './output-types'
 export type { CellSnapshot, PageEnvironment, PageSnapshot } from './snapshot-types'
 
 export { hashCode } from './code-hash'
-export { remarkCellPlugin } from './remark-cell-plugin'
 export { extractCells } from './extract-cells'
 export { findContentPages } from './content-scan'
 export type { ContentPage } from './content-scan'
@@ -14,12 +18,3 @@ export type { KernelClientOptions, ExecuteResult } from './kernel-client'
 
 export { runPageSnapshot, serializeSnapshot, writePageSnapshot } from './snapshot-executor'
 export type { SnapshotExecutorOptions, PageSnapshotSummary } from './snapshot-executor'
-
-export { KernelProvider, useKernel } from './components/KernelProvider'
-export type { KernelContextValue, KernelStatus, KernelProviderProps } from './components/KernelProvider'
-
-export { SnapshotProvider } from './components/SnapshotProvider'
-export { PyCell } from './components/PyCell'
-export type { PyCellProps } from './components/PyCell'
-export { OutputView } from './components/OutputView'
-export { KernelStatusBar } from './components/KernelStatusBar'
