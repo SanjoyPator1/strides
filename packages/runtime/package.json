@@ -27,6 +27,8 @@
     "@types/mdast": "^4.0.4",
     "@types/ws": "^8.18.1",
     "@types/mdx": "^2.0.14",
-    "@mdx-js/mdx": "^3.1.1"
+    "@mdx-js/mdx": "^3.1.1",
+    "@testing-library/react": "^16.3.2",
+    "jsdom": "^29.1.1"
   }
 }

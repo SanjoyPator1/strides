@@ -35,7 +35,7 @@ export interface KernelProviderProps {
 }
 
 export function KernelProvider({ gatewayUrl, children }: KernelProviderProps) {
-  const [, forceRender] = useReducer((n: number) => n + 1, 0)
+  const [version, forceRender] = useReducer((n: number) => n + 1, 0)
   const statusRef = useRef<KernelStatus>('checking')
   const cellsRef = useRef(new Map<number, CellRuntimeState>())
   const clientRef = useRef<StridesKernelClient | null>(null)
@@ -74,9 +74,7 @@ export function KernelProvider({ gatewayUrl, children }: KernelProviderProps) {
 
   const value = useMemo<KernelContextValue>(
     () => ({
-      get status() {
-        return statusRef.current
-      },
+      status: statusRef.current,
 
       registerCell(index, code) {
         if (cellsRef.current.has(index)) return
@@ -131,7 +129,10 @@ export function KernelProvider({ gatewayUrl, children }: KernelProviderProps) {
         forceRender()
       },
     }),
-    [gatewayUrl],
+    // `version` has no direct use in the body below; bumping it forces a new object
+    // reference so React Context actually propagates the (mutable-ref-backed) status
+    // and cell-state reads to consumers — see the note on statusRef/cellsRef above.
+    [gatewayUrl, version],
   )
 
   return <KernelContext.Provider value={value}>{children}</KernelContext.Provider>
