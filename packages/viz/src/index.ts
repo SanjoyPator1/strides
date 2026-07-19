@@ -32,3 +32,14 @@ export type { FlowProps, FlowExtraArrow } from './Flow'
 
 export { Detail, DetailRail, DetailRailProvider } from './Detail'
 export type { DetailProps, DetailRailProps, DetailRailProviderProps } from './Detail'
+
+export { TensorDive, buildDiveTree, fitCamera, drillTargetPath, zoomLadder } from './TensorDive'
+export type { TensorDiveProps, TensorDiveLevel, DiveTree, DiveNode } from './TensorDive'
+
+export { BracketDiagram, layoutBracket, matchPath, runOpacity } from './BracketDiagram'
+export type { BracketDiagramProps, BracketAnnotation, BracketRun, BracketLayout, BracketHover } from './BracketDiagram'
+
+export { CATEGORICAL, DIM_COLORS, tint } from './palette'
+
+export { seededRandom, roughEllipsePaths, roughArrowPaths } from './rough'
+export type { RoughArrow } from './rough'

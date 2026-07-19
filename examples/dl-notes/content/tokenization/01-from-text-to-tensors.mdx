@@ -1,0 +1,79 @@
+---
+title: From text to tensors
+description: How a raw sentence becomes the numbers a transformer actually consumes — text → tokens → token IDs → embedding vectors, explored interactively.
+---
+
+Before any attention score is computed, a language model has to solve a more basic
+problem: **it can only do math on numbers, and text is not numbers.** Every GPT-style
+model starts with the same pipeline:
+
+> Raw text → tokens → token IDs → embedding vectors
+
+This page walks that pipeline with two real sentences. Everything below is clickable —
+each stage unfolds beneath the previous one, so the sentence you start from stays visible
+while you drill all the way down to the actual numbers.
+
+## The journey, interactively
+
+Click a **batch row** to see its tokens. Click a **token chip** to see its ID. Click
+**embedding** to see the vector that ID looks up. Each token keeps its own color at
+every stage — follow one color and you're following one word through the whole pipeline.
+
+<TokenJourney
+  sequences={[
+    {
+      label: 'batch 0',
+      text: 'Your journey starts with one step',
+      tokens: [
+        { text: 'Your', id: 7120, embedding: [0.43, 0.15, 0.89] },
+        { text: ' journey', id: 7002, embedding: [0.55, 0.87, 0.66] },
+        { text: ' starts', id: 4940, embedding: [0.57, 0.85, 0.64] },
+        { text: ' with', id: 351, embedding: [0.22, 0.58, 0.33] },
+        { text: ' one', id: 530, embedding: [0.77, 0.25, 0.1] },
+        { text: ' step', id: 2239, embedding: [0.05, 0.8, 0.55] },
+      ],
+    },
+    {
+      label: 'batch 1',
+      text: 'Every effort moves you forward',
+      tokens: [
+        { text: 'Every', id: 6109, embedding: [0.12, 0.61, 0.35] },
+        { text: ' effort', id: 3626, embedding: [0.48, 0.09, 0.77] },
+        { text: ' moves', id: 6100, embedding: [0.83, 0.44, 0.21] },
+        { text: ' you', id: 345, embedding: [0.31, 0.72, 0.58] },
+        { text: ' forward', id: 2651, embedding: [0.66, 0.28, 0.9] },
+      ],
+    },
+  ]}
+/>
+
+The token IDs above are **real GPT-2 BPE IDs** (computed with `tiktoken`). The embedding
+values are the 3-dimensional toy vectors used throughout these notes — real GPT-2 small
+uses 768 dimensions per token, which is why nobody draws it by hand.
+
+## Three things worth noticing
+
+**The space is part of the token.** The chips render a leading space as `␣` because
+GPT-2's tokenizer genuinely keeps it: `␣journey` (ID 7002) and `journey` (a different ID
+entirely) are different tokens. This is why BPE round-trips text exactly — no spacing
+information is ever thrown away.
+
+**An ID is just a row number.** Token ID 7002 doesn't *mean* anything by itself — it's a
+lookup index into an embedding table, a big matrix with one row per vocabulary entry
+(50,257 rows for GPT-2). "Embedding a token" is literally `table[7002]`: grab row 7002.
+Those rows start as random numbers and are *learned* during training, which is where all
+the meaning comes from.
+
+**The batch dimension is just stacking.** Two sentences stacked on top of each other give
+the tensor its first dimension. After embedding, batch 0 here is a `(6, 3)` matrix —
+6 tokens, 3 dimensions each — and the batch of two would be `(2, 6, 3)`:
+`(batch, num_tokens, d_in)`. One wrinkle: batch 1 has only 5 tokens, and real tensors
+can't be ragged — that's why actual training pipelines slice text into fixed-length
+windows before batching.
+
+## Where this goes next
+
+Those embedding rows are exactly the `inputs` matrix that the
+[attention notes](/attention/01-attention-weights) start from — batch 0's six vectors are
+the same `(6, 3)` matrix used there to build queries, keys, and values. The whole
+attention mechanism is downstream of what you just clicked through.

@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POC 01 — SVG stage + beat timeline</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #05070c;
+    color: #cdd6e4;
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem 4rem;
+  }
+  .wrap { width: min(1100px, 100%); }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #9fb0c8; letter-spacing: 0.02em; }
+  .sub { font-size: 0.85rem; color: #64748b; margin: 0.35rem 0 1rem; }
+  .stage-box {
+    border: 1px solid #1b2331;
+    border-radius: 12px;
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 40%, #0b1018 0%, #05070c 75%);
+    box-shadow: 0 30px 80px rgb(0 0 0 / 0.55);
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .controls {
+    display: flex; align-items: center; gap: 0.75rem;
+    margin-top: 0.9rem;
+  }
+  .controls button {
+    background: #0e1420; color: #cdd6e4;
+    border: 1px solid #232e42; border-radius: 8px;
+    width: 2.4rem; height: 2.1rem; font-size: 0.95rem; cursor: pointer;
+  }
+  .controls button:hover { border-color: #3b82f6; }
+  #dots { display: flex; gap: 0.45rem; }
+  #dots button { width: 0.72rem; height: 0.72rem; border-radius: 50%; padding: 0; border: 1px solid #33415e; background: transparent; }
+  #dots button.active { background: #60a5fa; border-color: #60a5fa; }
+  #caption { flex: 1; font-size: 0.9rem; color: #93a6c4; font-style: italic; min-height: 1.3em; }
+  #readout {
+    margin-top: 0.6rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem; color: #506180; min-height: 1.3em;
+  }
+  .hot { filter: url(#glow); }
+  svg text { user-select: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>POC 01 — “interactive web-Manim”: stage + beat timeline</h1>
+  <p class="sub">One choreographed scene: raw text → BPE tokens → token IDs → embedding matrix → batch tensor.
+  Step through the beats — and hover any token <em>at any moment</em>: its color identity follows it through every representation.</p>
+
+  <div class="stage-box">
+    <svg id="stage" viewBox="0 0 1200 675" aria-label="Animated scene">
+      <defs>
+        <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="4" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="softglow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="8" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <pattern id="griddots" width="36" height="36" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="1" fill="#ffffff" opacity="0.05"/>
+        </pattern>
+      </defs>
+      <rect x="0" y="0" width="1200" height="675" fill="url(#griddots)"/>
+      <g id="world"></g>
+    </svg>
+  </div>
+
+  <div class="controls">
+    <button id="prev" title="Previous beat">⏮</button>
+    <button id="playpause" title="Play">▶</button>
+    <button id="next" title="Next beat">⏭</button>
+    <div id="dots"></div>
+    <div id="caption"></div>
+  </div>
+  <div id="readout">hover a token…</div>
+</div>
+
+<script>
+'use strict'
+
+/* ================================================================
+   ENGINE — the part we're actually evaluating (~180 lines).
+   A "scene" is: numeric state objects, DOM bindings that render
+   them, and an array of BEATS (async choreography steps). The
+   timeline supports next / prev / jump / autoplay by replaying
+   beats instantly onto a reset state — fully deterministic.
+   ================================================================ */
+
+const SVG = 'http://www.w3.org/2000/svg'
+const world = document.getElementById('world')
+const stage = document.getElementById('stage')
+
+function make (name, attrs = {}, parent = world) {
+  const node = document.createElementNS(SVG, name)
+  for (const k in attrs) node.setAttribute(k, attrs[k])
+  parent.appendChild(node)
+  return node
+}
+
+/* ---- tween core ---- */
+let INSTANT = false
+const live = []
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+const easeOut = t => 1 - Math.pow(1 - t, 3)
+const backOut = t => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2) }
+
+function tw (state, to, opts = {}) {
+  const { dur = 650, ease = easeInOut, delay = 0 } = opts
+  if (INSTANT || dur === 0) { Object.assign(state, to); return Promise.resolve() }
+  return new Promise(resolve => {
+    const from = {}
+    for (const k in to) from[k] = state[k]
+    live.push({ state, from, to, ease, resolve, t0: performance.now() + delay, dur })
+  })
+}
+const pause = ms => (INSTANT ? Promise.resolve() : new Promise(r => setTimeout(r, ms)))
+
+function flushTweens () {
+  for (const t of live) { Object.assign(t.state, t.to); t.resolve() }
+  live.length = 0
+}
+
+function frame (now) {
+  for (let i = live.length - 1; i >= 0; i--) {
+    const t = live[i]
+    if (now < t.t0) continue
+    const p = Math.min(1, (now - t.t0) / t.dur)
+    const e = t.ease(p)
+    for (const k in t.to) t.state[k] = t.from[k] + (t.to[k] - t.from[k]) * e
+    if (p === 1) { live.splice(i, 1); t.resolve() }
+  }
+  renderAll()
+  requestAnimationFrame(frame)
+}
+
+/* ---- state <-> DOM bindings ---- */
+const bindings = []
+function bind (state, apply) { bindings.push({ state, apply }) }
+function renderAll () {
+  for (const b of bindings) b.apply(b.state)
+  const c = S.camera
+  stage.setAttribute('viewBox',
+    `${c.cx - 600 / c.z} ${c.cy - 337.5 / c.z} ${1200 / c.z} ${675 / c.z}`)
+}
+
+/* ---- deterministic timeline ---- */
+function snapshot (obj) { return JSON.parse(JSON.stringify(obj)) }
+function restore (target, snap) {
+  for (const k in snap) {
+    if (typeof snap[k] === 'object') restore(target[k], snap[k])
+    else target[k] = snap[k]
+  }
+}
+
+let current = -1
+let busy = false
+let playing = false
+
+async function runBeat (n) {
+  busy = true
+  await BEATS[n].run()
+  current = n
+  busy = false
+  updateUI()
+}
+
+async function goTo (n) {
+  busy = true
+  playing = false
+  flushTweens()
+  restore(S, INIT)
+  INSTANT = true
+  for (let i = 0; i <= n; i++) await BEATS[i].run()
+  INSTANT = false
+  current = n
+  busy = false
+  renderAll()
+  updateUI()
+}
+
+async function next () { if (!busy && current < BEATS.length - 1) await runBeat(current + 1) }
+async function prev () { if (!busy && current >= 0) await goTo(current - 1) }
+async function play () {
+  if (busy || playing) { playing = false; updateUI(); return }
+  playing = true
+  updateUI()
+  if (current === BEATS.length - 1) await goTo(-1)
+  while (playing && current < BEATS.length - 1) {
+    await runBeat(current + 1)
+    if (current < BEATS.length - 1) await pause(850)
+  }
+  playing = false
+  updateUI()
+}
+
+/* ================================================================
+   SCENE — the tokenization → embedding story.
+   ================================================================ */
+
+const tokens = [
+  { text: 'Your',     id: 7120, emb: [0.43, 0.15, 0.89] },
+  { text: ' journey', id: 7002, emb: [0.55, 0.87, 0.66] },
+  { text: ' starts',  id: 4940, emb: [0.57, 0.85, 0.64] },
+  { text: ' with',    id: 351,  emb: [0.22, 0.58, 0.33] },
+  { text: ' one',     id: 530,  emb: [0.77, 0.25, 0.10] },
+  { text: ' step',    id: 2239, emb: [0.05, 0.80, 0.55] },
+]
+const GOLDEN = 137.508
+const hue = id => ((id * GOLDEN) % 360 + 360) % 360
+const col = (id, l = 62, a = 1) => `hsl(${hue(id)} 75% ${l}% / ${a})`
+const visible = t => t.replace(/^ /, '␣')
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace'
+
+/* ---- layout math ---- */
+const sentence = tokens.map(t => t.text.trim())
+const SENT_FS = 36; const SENT_CW = SENT_FS * 0.6
+const sentW = (sentence.join(' ')).length * SENT_CW
+let cursor = 600 - sentW / 2
+const wordC = sentence.map(w => { const c = cursor + (w.length * SENT_CW) / 2; cursor += (w.length + 1) * SENT_CW; return c })
+
+const CHIP_FS = 24; const CHIP_CW = CHIP_FS * 0.6; const CHIP_H = 38; const CHIP_GAP = 16; const CHIP_Y = 168
+const chipW = tokens.map(t => visible(t.text).length * CHIP_CW + 28)
+const chipsTotal = chipW.reduce((a, b) => a + b, 0) + CHIP_GAP * (tokens.length - 1)
+cursor = 600 - chipsTotal / 2
+const chipC = chipW.map(w => { const c = cursor + w / 2; cursor += w + CHIP_GAP; return c })
+
+const BADGE_FS = 22; const BADGE_H = 32; const BADGE_Y = 248
+const badgeW = tokens.map(t => String(t.id).length * BADGE_FS * 0.6 + 26)
+
+const CELL_W = 68; const CELL_H = 42; const CELL_GX = 76; const ROW_GY = 50
+const MAT_Y0 = 350; const MAT_X0 = 600 - CELL_GX
+const cellX = c => MAT_X0 + c * CELL_GX
+const rowY = r => MAT_Y0 + r * ROW_GY
+
+/* ---- build scene objects (state + SVG) ---- */
+const S = { camera: { cx: 600, cy: 337.5, z: 1 } }
+const perToken = tokens.map(() => [])   // groups per token, for hover highlighting
+
+function group (state, parent = world) {
+  const g = make('g', {}, parent)
+  bind(state, s => {
+    g.setAttribute('transform', `translate(${s.x} ${s.y}) scale(${s.s})`)
+    g.setAttribute('opacity', s.o)
+    g.style.pointerEvents = s.o < 0.05 ? 'none' : 'auto'
+  })
+  return g
+}
+
+S.word = []; S.chip = []; S.badge = []; S.cells = []; S.rowlab = []
+tokens.forEach((t, i) => {
+  // sentence word
+  const ws = { x: wordC[i], y: 310, s: 1, o: 1 }
+  const wg = group(ws)
+  const wt = make('text', { 'text-anchor': 'middle', 'dominant-baseline': 'middle', fill: '#e8edf7', 'font-size': SENT_FS, filter: 'url(#softglow)' }, wg)
+  wt.style.fontFamily = MONO
+  wt.textContent = sentence[i]
+  S.word.push(ws); perToken[i].push(wg)
+
+  // token chip
+  const cs = { x: chipC[i], y: CHIP_Y, s: 1, o: 0 }
+  const cg = group(cs)
+  make('rect', { x: -chipW[i] / 2, y: -CHIP_H / 2, width: chipW[i], height: CHIP_H, rx: 8, fill: col(t.id, 60, 0.16), stroke: col(t.id), 'stroke-width': 1.6 }, cg)
+  const ct = make('text', { 'text-anchor': 'middle', 'dominant-baseline': 'middle', fill: '#eef2fa', 'font-size': CHIP_FS }, cg)
+  ct.style.fontFamily = MONO
+  ct.textContent = visible(t.text)
+  S.chip.push(cs); perToken[i].push(cg)
+
+  // id badge
+  const bs = { x: chipC[i], y: BADGE_Y, s: 1, o: 0 }
+  const bg = group(bs)
+  make('rect', { x: -badgeW[i] / 2, y: -BADGE_H / 2, width: badgeW[i], height: BADGE_H, rx: 16, fill: '#0b1220', stroke: col(t.id), 'stroke-width': 1.6 }, bg)
+  const bt = make('text', { 'text-anchor': 'middle', 'dominant-baseline': 'middle', fill: col(t.id, 72), 'font-size': BADGE_FS }, bg)
+  bt.style.fontFamily = MONO
+  bt.textContent = t.id
+  S.badge.push(bs); perToken[i].push(bg)
+
+  // embedding row cells
+  const rowStates = []
+  t.emb.forEach((v, c) => {
+    const st = { x: cellX(c), y: rowY(i), s: 1, o: 0 }
+    const g = group(st)
+    make('rect', { x: -CELL_W / 2, y: -CELL_H / 2, width: CELL_W, height: CELL_H, rx: 6, fill: `hsl(222 65% ${14 + v * 42}%)`, stroke: '#2a3a55', 'stroke-width': 1 }, g)
+    const vt = make('text', { 'text-anchor': 'middle', 'dominant-baseline': 'middle', fill: '#dbe6fa', 'font-size': 15 }, g)
+    vt.style.fontFamily = MONO
+    vt.textContent = v.toFixed(2)
+    rowStates.push(st); perToken[i].push(g)
+  })
+  S.cells.push(rowStates)
+
+  // matrix row label
+  const rs = { x: MAT_X0 - CELL_W / 2 - 16, y: rowY(i), s: 1, o: 0 }
+  const rg = group(rs)
+  const rt = make('text', { 'text-anchor': 'end', 'dominant-baseline': 'middle', fill: col(t.id, 70), 'font-size': 16 }, rg)
+  rt.style.fontFamily = MONO
+  rt.textContent = visible(t.text)
+  S.rowlab.push(rs); perToken[i].push(rg)
+})
+
+function label (text, x, y, opts = {}) {
+  const st = { x, y, s: 1, o: 0 }
+  const g = group(st)
+  const t = make('text', { 'text-anchor': opts.anchor || 'middle', 'dominant-baseline': 'middle', fill: opts.fill || '#7d90b0', 'font-size': opts.fs || 17 }, g)
+  t.style.fontFamily = opts.mono === false ? 'inherit' : MONO
+  if (opts.italic) t.style.fontStyle = 'italic'
+  t.textContent = text
+  return st
+}
+
+S.stageTokens = label('tokens', chipC[0] - chipW[0] / 2 - 18, CHIP_Y, { anchor: 'end', fs: 14 })
+S.stageIds = label('token ids', chipC[0] - chipW[0] / 2 - 18, BADGE_Y, { anchor: 'end', fs: 14 })
+S.dhdr = label('d = 3', 600, MAT_Y0 - 44, { fs: 15 })
+S.shape1 = label('shape (6, 3)', cellX(2) + CELL_W / 2 + 26, rowY(2) + ROW_GY / 2, { anchor: 'start', fs: 18, fill: '#facc15' })
+S.oneVec = label('one token = one vector', 600, rowY(1) + 34, { fs: 13, italic: true })
+
+// ghost frame for the batch tease
+const ghost = { x: 16, y: -16, s: 1, o: 0 }
+{
+  const g = group(ghost)
+  make('rect', {
+    x: MAT_X0 - CELL_W / 2 - 10, y: MAT_Y0 - CELL_H / 2 - 10,
+    width: CELL_GX * 2 + CELL_W + 20, height: ROW_GY * 5 + CELL_H + 20,
+    rx: 10, fill: 'none', stroke: '#5b6c8f', 'stroke-width': 1.4, 'stroke-dasharray': '6 5',
+  }, g)
+  const gt = make('text', { x: MAT_X0 - CELL_W / 2 - 4, y: MAT_Y0 - CELL_H / 2 - 22, fill: '#5b6c8f', 'font-size': 13 }, g)
+  gt.style.fontFamily = MONO
+  gt.textContent = 'batch 1: “Every effort moves you forward”'
+}
+S.ghost = ghost
+S.shape2 = label('stack sentences → shape (2, 6, 3)', cellX(2) + CELL_W / 2 + 26, rowY(3) + ROW_GY / 2, { anchor: 'start', fs: 18, fill: '#facc15' })
+
+const INIT = snapshot(S)
+
+/* ---- the beats ---- */
+const BEATS = [
+  {
+    caption: 'Tokenize: BPE cracks the sentence apart — and the leading space belongs to the token (␣journey).',
+    async run () {
+      await Promise.all(tokens.map((t, i) => (async () => {
+        await pause(i * 70)
+        tw(S.word[i], { x: chipC[i], y: CHIP_Y, s: CHIP_FS / SENT_FS }, { dur: 750 })
+        await tw(S.chip[i], { o: 1 }, { dur: 750, delay: 320 })
+        await tw(S.word[i], { o: 0 }, { dur: 200 })
+      })()))
+      await tw(S.stageTokens, { o: 1 }, { dur: 300 })
+    },
+  },
+  {
+    caption: 'Every token string maps to an integer — its row number in a 50,257-entry vocabulary.',
+    async run () {
+      await Promise.all(tokens.map((t, i) => (async () => {
+        await pause(i * 90)
+        Object.assign(S.badge[i], { y: CHIP_Y + 20, s: 0.5 })
+        await Promise.all([
+          tw(S.badge[i], { o: 1 }, { dur: 250 }),
+          tw(S.badge[i], { y: BADGE_Y, s: 1 }, { dur: 550, ease: backOut }),
+        ])
+      })()))
+      await tw(S.stageIds, { o: 1 }, { dur: 300 })
+    },
+  },
+  {
+    caption: 'Embedding lookup: each ID fetches its row of learned numbers — the rows stack into a (6 × 3) matrix.',
+    async run () {
+      await Promise.all(tokens.map((t, i) => (async () => {
+        await pause(i * 130)
+        tw(S.badge[i], { s: 1.18 }, { dur: 160, ease: easeOut })
+        const flights = t.emb.map((v, c) => {
+          Object.assign(S.cells[i][c], { x: S.badge[i].x, y: BADGE_Y, s: 0.25, o: 0 })
+          tw(S.cells[i][c], { o: 1 }, { dur: 260, delay: c * 70 })
+          return tw(S.cells[i][c], { x: cellX(c), y: rowY(i), s: 1 }, { dur: 700, delay: c * 70 })
+        })
+        tw(S.badge[i], { s: 1 }, { dur: 200, delay: 220 })
+        await Promise.all(flights)
+        await tw(S.rowlab[i], { o: 1 }, { dur: 280 })
+      })()))
+      await Promise.all([
+        tw(S.dhdr, { o: 1 }, { dur: 350 }),
+        tw(S.shape1, { o: 1 }, { dur: 350 }),
+      ])
+    },
+  },
+  {
+    caption: 'Zoom in: “␣journey” is these three numbers now. That vector is what attention will actually read.',
+    async run () {
+      await tw(S.camera, { cx: 600, cy: rowY(1) + 10, z: 2.1 }, { dur: 900 })
+      for (const c of S.cells[1]) tw(c, { s: 1.14 }, { dur: 220, ease: easeOut })
+      await pause(240)
+      for (const c of S.cells[1]) tw(c, { s: 1 }, { dur: 260 })
+      await tw(S.oneVec, { o: 1 }, { dur: 300 })
+    },
+  },
+  {
+    caption: 'Zoom out and stack a second sentence behind: (2, 6, 3) — batch, tokens, dimensions. The transformer\'s real input.',
+    async run () {
+      tw(S.oneVec, { o: 0 }, { dur: 250 })
+      await tw(S.camera, { cx: 600, cy: 337.5, z: 1 }, { dur: 900 })
+      await Promise.all([
+        tw(S.ghost, { o: 1 }, { dur: 500 }),
+        tw(S.shape1, { o: 0 }, { dur: 300 }),
+        tw(S.shape2, { o: 1 }, { dur: 500, delay: 150 }),
+      ])
+    },
+  },
+]
+
+/* ---- hover interactivity (works at any beat) ---- */
+const readout = document.getElementById('readout')
+tokens.forEach((t, i) => {
+  for (const g of perToken[i]) {
+    g.addEventListener('pointerenter', () => {
+      perToken[i].forEach(n => n.classList.add('hot'))
+      readout.textContent = `${visible(t.text)} → id ${t.id} → [${t.emb.map(v => v.toFixed(2)).join(', ')}]`
+      readout.style.color = col(t.id, 70)
+    })
+    g.addEventListener('pointerleave', () => {
+      perToken[i].forEach(n => n.classList.remove('hot'))
+      readout.textContent = 'hover a token…'
+      readout.style.color = ''
+    })
+  }
+})
+
+/* ---- controls ---- */
+const captionEl = document.getElementById('caption')
+const dotsEl = document.getElementById('dots')
+const playBtn = document.getElementById('playpause')
+BEATS.forEach((b, i) => {
+  const d = document.createElement('button')
+  d.title = `Beat ${i + 1}`
+  d.addEventListener('click', () => { if (!busy) goTo(i) })
+  dotsEl.appendChild(d)
+})
+function updateUI () {
+  captionEl.textContent = current === -1
+    ? 'Raw text. The model can\'t do math on this — press ▶'
+    : BEATS[current].caption
+  Array.from(dotsEl.children).forEach((d, i) => d.classList.toggle('active', i === current))
+  playBtn.textContent = playing ? '⏸' : '▶'
+}
+document.getElementById('next').addEventListener('click', next)
+document.getElementById('prev').addEventListener('click', prev)
+playBtn.addEventListener('click', play)
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') next()
+  if (e.key === 'ArrowLeft') prev()
+  if (e.key === ' ') { e.preventDefault(); play() }
+})
+
+updateUI()
+renderAll()
+requestAnimationFrame(frame)
+</script>
+</body>
+</html>

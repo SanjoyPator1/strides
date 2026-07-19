@@ -15,8 +15,10 @@ import {
   Detail,
   DetailRail,
   DetailRailProvider,
+  TensorDive,
+  BracketDiagram,
 } from '@strides/viz'
-import { AttentionHeatmap, HeadSplitViz } from '@strides/viz-ml'
+import { AttentionHeatmap, HeadSplitViz, TokenJourney } from '@strides/viz-ml'
 
 /** Viz components available to every page's MDX by default, ahead of the caller's own component map. */
 export const defaultComponents: MDXComponents = {
@@ -35,6 +37,9 @@ export const defaultComponents: MDXComponents = {
   Detail,
   DetailRail,
   DetailRailProvider,
+  TensorDive,
+  BracketDiagram,
   AttentionHeatmap,
   HeadSplitViz,
+  TokenJourney,
 }

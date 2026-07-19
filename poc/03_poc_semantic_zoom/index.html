@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POC 03 — semantic zoom: dive into a 4D tensor</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #f9f9f7;
+    color: #0b0b0b;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem 4rem;
+  }
+  .wrap { width: min(1100px, 100%); }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #0b0b0b; letter-spacing: 0.01em; }
+  .sub { font-size: 0.85rem; color: #52514e; margin: 0.35rem 0 0.8rem; }
+  #shapebar {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.95rem; margin-bottom: 0.6rem; color: #898781;
+  }
+  #shapebar .dim-done { color: #006300; }
+  #shapebar .dim-now { color: #1c5cab; font-weight: 700; }
+  .stage-box {
+    border: 1px solid #e1e0d9;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fcfcfb;
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.07);
+  }
+  svg { display: block; width: 100%; height: auto; }
+  .bar { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.9rem; flex-wrap: wrap; }
+  .bar button {
+    background: #ffffff; color: #0b0b0b;
+    border: 1px solid #c3c2b7; border-radius: 8px;
+    padding: 0.3rem 0.7rem; font-size: 0.85rem; cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .bar button:hover { border-color: #2a78d6; }
+  .bar .sep { color: #c3c2b7; }
+  .bar button.here { border-color: #2a78d6; color: #1c5cab; }
+  #hint { font-size: 0.78rem; color: #898781; margin-top: 0.55rem; }
+  #readout {
+    margin-top: 0.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem; color: #52514e; min-height: 1.3em;
+  }
+  .hot { stroke-width: 2.75px; }
+  svg text { user-select: none; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>POC 03 — semantic zoom: <code>queries (2, 6, 2, 1)</code> as a world you dive into</h1>
+  <p class="sub">The whole tensor is rendered as true nested containment — batches contain tokens contain heads contain values.
+  Click a box and the camera flies <em>inside</em> it. Labels fade in at the zoom level where they matter.</p>
+  <div id="shapebar"></div>
+
+  <div class="stage-box">
+    <svg id="stage" viewBox="0 0 1200 675" aria-label="Zoomable tensor">
+      <defs>
+        <pattern id="griddots" width="36" height="36" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="1" fill="#0b0b0b" opacity="0.05"/>
+        </pattern>
+      </defs>
+      <rect id="bg" x="-3000" y="-3000" width="7200" height="7200" fill="url(#griddots)"/>
+      <g id="world"></g>
+    </svg>
+  </div>
+
+  <div class="bar" id="crumbs"></div>
+  <div id="hint">click a box to dive in · click empty space / Esc to rise back up · hover anything for its index</div>
+  <div id="readout">hover a box…</div>
+</div>
+
+<script>
+'use strict'
+
+/* ================================================================
+   ENGINE — tween core + camera (subset of POC 01/02's engine;
+   no beat timeline here: navigation IS the choreography).
+   ================================================================ */
+
+const SVG = 'http://www.w3.org/2000/svg'
+const world = document.getElementById('world')
+const stage = document.getElementById('stage')
+
+function make (name, attrs = {}, parent = world) {
+  const node = document.createElementNS(SVG, name)
+  for (const k in attrs) node.setAttribute(k, attrs[k])
+  parent.appendChild(node)
+  return node
+}
+
+let INSTANT = false
+const live = []
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+
+function tw (state, to, opts = {}) {
+  const { dur = 750, ease = easeInOut, delay = 0 } = opts
+  if (INSTANT || dur === 0) { Object.assign(state, to); return Promise.resolve() }
+  return new Promise(resolve => {
+    const from = {}
+    for (const k in to) from[k] = state[k]
+    live.push({ state, from, to, ease, resolve, t0: performance.now() + delay, dur })
+  })
+}
+
+function frame (now) {
+  for (let i = live.length - 1; i >= 0; i--) {
+    const t = live[i]
+    if (now < t.t0) continue
+    const p = Math.min(1, (now - t.t0) / t.dur)
+    const e = t.ease(p)
+    for (const k in t.to) t.state[k] = t.from[k] + (t.to[k] - t.from[k]) * e
+    if (p === 1) { live.splice(i, 1); t.resolve() }
+  }
+  renderAll()
+  requestAnimationFrame(frame)
+}
+
+const camera = { cx: 600, cy: 337.5, z: 1 }
+
+/* Level-of-detail: a label is visible in a zoom band. Trapezoid ramp. */
+const lodLabels = []   // { el, lo, hi }
+function lodOp (z, lo, hi) {
+  if (z < lo * 0.72) return 0
+  if (z < lo) return (z - lo * 0.72) / (lo * 0.28)
+  if (hi && z > hi * 1.6) return 0
+  if (hi && z > hi) return 1 - (z - hi) / (hi * 0.6)
+  return 1
+}
+
+function renderAll () {
+  stage.setAttribute('viewBox',
+    `${camera.cx - 600 / camera.z} ${camera.cy - 337.5 / camera.z} ${1200 / camera.z} ${675 / camera.z}`)
+  for (const l of lodLabels) l.el.setAttribute('opacity', lodOp(camera.z, l.lo, l.hi).toFixed(3))
+}
+
+/* ================================================================
+   THE TENSOR WORLD — queries (2, 6, 2, 1), letters a–l, both
+   batches identical (exactly the ch03 section-10 example).
+   ================================================================ */
+
+const tokens = [
+  { text: 'Your',     id: 7120 },
+  { text: ' journey', id: 7002 },
+  { text: ' starts',  id: 4940 },
+  { text: ' with',    id: 351  },
+  { text: ' one',     id: 530  },
+  { text: ' step',    id: 2239 },
+]
+const LETTERS = 'abcdefghijkl'
+
+/* Validated categorical palette (light mode) — slots 1–6, fixed order per token index.
+   Heads are NOT a third hue family: head 0 = solid border, head 1 = dashed border,
+   always labeled, so identity is never color-alone. */
+const TOKEN_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948']
+const INK = '#0b0b0b'
+const INK_2 = '#52514e'
+const MUTED = '#898781'
+const HAIRLINE = '#e1e0d9'
+const BASELINE = '#c3c2b7'
+
+const tokenColor = i => TOKEN_COLORS[i % TOKEN_COLORS.length]
+function tint (hex, a) {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
+const headDash = h => (h === 1 ? '4 3' : 'none')
+const visible = t => t.replace(/^ /, '␣')
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace'
+const SENTENCE = '“Your journey starts with one step”'
+
+/* ---- node tree with absolute geometry ---- */
+/* level: 0 root, 1 batch, 2 token, 3 head, 4 value */
+const TREE = { name: 'queries', level: 0, x: 80, y: 60, w: 1040, h: 560, parent: null, children: [], idx: [] }
+
+for (let b = 0; b < 2; b++) {
+  const bn = {
+    name: `batch ${b}`, level: 1, parent: TREE, idx: [b],
+    x: 140 + b * 520, y: 200, w: 400, h: 300, children: [],
+  }
+  TREE.children.push(bn)
+  tokens.forEach((t, i) => {
+    const c = i % 3, r = Math.floor(i / 3)
+    const tn = {
+      name: visible(t.text), level: 2, parent: bn, idx: [b, i], token: t,
+      x: bn.x + 20 + c * 124, y: bn.y + 20 + r * 123, w: 112, h: 111, children: [],
+    }
+    bn.children.push(tn)
+    for (let h = 0; h < 2; h++) {
+      const hn = {
+        name: `head ${h}`, level: 3, parent: tn, idx: [b, i, h], token: t, head: h,
+        x: tn.x + 15 + h * 51, y: tn.y + 16, w: 41, h: 58, children: [],
+      }
+      tn.children.push(hn)
+      const vn = {
+        name: LETTERS[i * 2 + h], level: 4, parent: hn, idx: [b, i, h, 0], token: t, head: h,
+        x: hn.x + 7.5, y: hn.y + 24, w: 26, h: 26, children: [],
+      }
+      hn.children.push(vn)
+    }
+  })
+}
+
+/* ---- draw the world ---- */
+const DIMS = ['batch', 'tokens', 'heads', 'head_dim']
+const nodeEls = new Map()   // node -> main shape element (for .hot)
+
+function drawNode (n) {
+  const g = make('g')
+  let shape
+  if (n.level === 0) {
+    shape = make('rect', { x: n.x, y: n.y, width: n.w, height: n.h, rx: 14, fill: '#ffffff', stroke: BASELINE, 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' }, g)
+    const t = make('text', { x: n.x + 22, y: n.y + 30, fill: INK_2, 'font-size': 16 }, g)
+    t.style.fontFamily = MONO
+    t.textContent = 'queries (2, 6, 2, 1) — click a batch to dive in'
+    lodLabels.push({ el: t, lo: 0, hi: 1.5 })
+  } else if (n.level === 1) {
+    shape = make('rect', { x: n.x, y: n.y, width: n.w, height: n.h, rx: 12, fill: '#f9f9f7', stroke: BASELINE, 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' }, g)
+    const t = make('text', { x: n.x + n.w / 2, y: n.y - 12, 'text-anchor': 'middle', fill: INK_2, 'font-size': 13, 'font-weight': 600 }, g)
+    t.style.fontFamily = MONO
+    t.textContent = `batch ${n.idx[0]}${n.idx[0] === 1 ? ' — identical' : ''}`
+    lodLabels.push({ el: t, lo: 0, hi: 3.5 })
+    const s = make('text', { x: n.x + n.w / 2, y: n.y + n.h - 14, 'text-anchor': 'middle', fill: MUTED, 'font-size': 6.5 }, g)
+    s.style.fontFamily = MONO
+    s.textContent = SENTENCE
+    lodLabels.push({ el: s, lo: 1.1, hi: 3.5 })
+  } else if (n.level === 2) {
+    const c = tokenColor(n.idx[1])
+    shape = make('rect', { x: n.x, y: n.y, width: n.w, height: n.h, rx: 9, fill: tint(c, 0.10), stroke: c, 'stroke-width': 1.4, 'vector-effect': 'non-scaling-stroke' }, g)
+    const t = make('text', { x: n.x + n.w / 2, y: n.y + n.h - 12, 'text-anchor': 'middle', fill: INK, 'font-size': 8 }, g)
+    t.style.fontFamily = MONO
+    t.textContent = `${visible(n.token.text)} · token ${n.idx[1]}`
+    lodLabels.push({ el: t, lo: 1.5, hi: 8 })
+  } else if (n.level === 3) {
+    shape = make('rect', { x: n.x, y: n.y, width: n.w, height: n.h, rx: 6, fill: '#ffffff', stroke: INK_2, 'stroke-width': 1.2, 'stroke-dasharray': headDash(n.head), 'vector-effect': 'non-scaling-stroke' }, g)
+    const t = make('text', { x: n.x + n.w / 2, y: n.y + 9, 'text-anchor': 'middle', fill: INK_2, 'font-size': 4.5, 'font-weight': 600 }, g)
+    t.style.fontFamily = MONO
+    t.textContent = `head ${n.head}`
+    lodLabels.push({ el: t, lo: 3.2 })
+  } else {
+    const c = tokenColor(n.idx[1])
+    shape = make('circle', { cx: n.x + n.w / 2, cy: n.y + n.h / 2, r: n.w / 2, fill: tint(c, 0.16), stroke: c, 'stroke-width': 1.2, 'stroke-dasharray': headDash(n.head), 'vector-effect': 'non-scaling-stroke' }, g)
+    const t = make('text', { x: n.x + n.w / 2, y: n.y + n.h / 2 + 3.2, 'text-anchor': 'middle', fill: INK, 'font-size': 9, 'font-weight': 600 }, g)
+    t.style.fontFamily = MONO
+    t.textContent = n.name
+    lodLabels.push({ el: t, lo: 2.4 })
+  }
+  shape.style.cursor = 'pointer'
+  nodeEls.set(n, shape)
+
+  shape.addEventListener('click', e => { e.stopPropagation(); onNodeClick(n) })
+  shape.addEventListener('pointerover', e => { e.stopPropagation(); onHover(n) })
+  shape.addEventListener('pointerout', e => { e.stopPropagation(); onHover(null) })
+
+  n.children.forEach(drawNode)
+}
+drawNode(TREE)
+
+/* ================================================================
+   NAVIGATION — click = dive one level toward what you clicked.
+   ================================================================ */
+
+let focus = TREE
+let busy = false
+
+function fit (n) {
+  if (n.level === 0) return { cx: 600, cy: 337.5, z: 1 }
+  const pad = 1.35
+  const z = Math.min(1200 / (n.w * pad), 675 / (n.h * pad), 24)
+  return { cx: n.x + n.w / 2, cy: n.y + n.h / 2, z }
+}
+
+/* Pure: given a clicked node and the current focus, what do we fly to?
+   - clicked deeper than focus → the child of focus that leads toward it
+   - clicked is focus itself or an ancestor of focus → focus's parent (rise) */
+function drillTarget (clicked, focusNode) {
+  const chain = []
+  for (let n = clicked; n; n = n.parent) chain.unshift(n)
+  const fi = chain.indexOf(focusNode)
+  if (fi >= 0 && fi < chain.length - 1) return chain[fi + 1]
+  return focusNode.parent || focusNode
+}
+
+async function focusTo (n) {
+  if (busy || !n) return
+  busy = true
+  focus = n
+  updateBars()
+  await tw(camera, fit(n), { dur: 850 })
+  busy = false
+}
+
+function onNodeClick (n) { focusTo(drillTarget(n, focus)) }
+stage.addEventListener('click', () => { if (focus.parent) focusTo(focus.parent) })
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && focus.parent) focusTo(focus.parent)
+})
+
+/* ================================================================
+   BARS — breadcrumbs, live index shapebar, hover readout.
+   ================================================================ */
+
+const crumbsEl = document.getElementById('crumbs')
+const shapebarEl = document.getElementById('shapebar')
+const readout = document.getElementById('readout')
+
+function pathOf (n) {
+  const chain = []
+  for (let c = n; c; c = c.parent) chain.unshift(c)
+  return chain
+}
+
+function indexString (n, padChar = '·') {
+  const parts = ['·', '·', '·', '·'].map((_, d) => (d < n.idx.length ? String(n.idx[d]) : padChar))
+  return `queries[${parts.join(', ')}]`
+}
+
+function updateBars () {
+  crumbsEl.innerHTML = ''
+  const chain = pathOf(focus)
+  chain.forEach((n, i) => {
+    if (i > 0) {
+      const s = document.createElement('span')
+      s.className = 'sep'
+      s.textContent = '›'
+      crumbsEl.appendChild(s)
+    }
+    const b = document.createElement('button')
+    b.textContent = n.level === 4 ? `${n.name} (value)` : n.name
+    if (n === focus) b.classList.add('here')
+    b.addEventListener('click', () => focusTo(n))
+    crumbsEl.appendChild(b)
+  })
+
+  const d = focus.idx.length   // how many dims are already chosen
+  const idxParts = ['·', '·', '·', '·'].map((c, i) =>
+    i < d ? `<span class="dim-done">${focus.idx[i]}</span>` : (i === d ? `<span class="dim-now">·</span>` : c))
+  const dimParts = DIMS.map((name, i) =>
+    i < d ? `<span class="dim-done">${name} ✓</span>` : (i === d ? `<span class="dim-now">${name} ← choose</span>` : name))
+  shapebarEl.innerHTML = `queries[${idxParts.join(', ')}] &nbsp;—&nbsp; (${dimParts.join(', ')})`
+}
+
+function onHover (n) {
+  for (const [node, el] of nodeEls) el.classList.toggle('hot', n !== null && node === n)
+  if (!n || n.level === 0) {
+    readout.textContent = 'hover a box…'
+    return
+  }
+  let desc
+  if (n.level === 1) desc = `batch ${n.idx[0]} — 6 tokens`
+  if (n.level === 2) desc = `batch ${n.idx[0]} · ${visible(n.token.text)} — owns both heads`
+  if (n.level === 3) desc = `batch ${n.idx[0]} · ${visible(n.token.text)} · head ${n.head} — holds ${LETTERS[n.idx[1] * 2 + n.head]}`
+  if (n.level === 4) desc = `= ${n.name} · batch ${n.idx[0]} · ${visible(n.token.text)} · head ${n.head}`
+  // identity is carried by a colored dot; the text itself stays in ink for contrast
+  const dot = n.token ? `<span style="color:${tokenColor(n.idx[1])}">●</span> ` : ''
+  readout.innerHTML = `${dot}${indexString(n)} ${desc}`
+}
+
+updateBars()
+renderAll()
+requestAnimationFrame(frame)
+</script>
+</body>
+</html>

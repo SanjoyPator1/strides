@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POC 04 — annotated bracket notation</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #f9f9f7;
+    color: #0b0b0b;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem 4rem;
+  }
+  .wrap { width: min(1100px, 100%); }
+  h1 { font-size: 1.05rem; font-weight: 600; color: #0b0b0b; letter-spacing: 0.01em; }
+  .sub { font-size: 0.85rem; color: #52514e; margin: 0.35rem 0 0.8rem; }
+  .stage-box {
+    border: 1px solid #e1e0d9;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fcfcfb;
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.07);
+  }
+  svg { display: block; width: 100%; height: auto; }
+  #hint { font-size: 0.78rem; color: #898781; margin-top: 0.55rem; }
+  #readout {
+    margin-top: 0.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem; color: #52514e; min-height: 1.3em;
+  }
+  svg text { user-select: none; }
+  .fade-in { animation: fi 0.25s ease-out; }
+  @keyframes fi { from { opacity: 0; } to { opacity: 1; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>POC 04 — the bracket notation IS the diagram</h1>
+  <p class="sub">The ch03 notes' nested-list ASCII, typeset live: brackets colored by the dimension they open,
+  margin notes, hand-drawn teacher markup (lassos + arrows), and index tracing — hover an
+  <code>queries[b, t, h, d]</code> line at the bottom and watch it find its letter.</p>
+
+  <div class="stage-box">
+    <svg id="stage" viewBox="0 0 1200 900" aria-label="Annotated bracket diagram">
+      <g id="washes"></g>
+      <g id="content"></g>
+      <g id="scribbles"></g>
+      <g id="dynamic"></g>
+    </svg>
+  </div>
+
+  <div id="hint">hover a letter → its bracket path lights up · hover a dim in the shape → all its brackets ·
+  hover an indexing line → an arrow traces to the value</div>
+  <div id="readout">hover something…</div>
+</div>
+
+<script>
+'use strict'
+
+/* ================================================================
+   SETUP — light theme, validated colors.
+   ================================================================ */
+
+const SVG = 'http://www.w3.org/2000/svg'
+const gWash = document.getElementById('washes')
+const gContent = document.getElementById('content')
+const gScribble = document.getElementById('scribbles')
+const gDynamic = document.getElementById('dynamic')
+
+function make (name, attrs = {}, parent = gContent) {
+  const node = document.createElementNS(SVG, name)
+  for (const k in attrs) node.setAttribute(k, attrs[k])
+  parent.appendChild(node)
+  return node
+}
+
+const INK = '#0b0b0b'
+const INK_2 = '#52514e'
+const MUTED = '#898781'
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace'
+
+/* dimension colors — validated as a set (violet, aqua, orange, magenta) */
+const DIMS = [
+  { name: 'batch',    color: '#4a3aa7', size: 2 },
+  { name: 'tokens',   color: '#1baf7a', size: 6 },
+  { name: 'heads',    color: '#eb6834', size: 2 },
+  { name: 'head_dim', color: '#e87ba4', size: 1 },
+]
+/* token identity colors — same validated categorical order as POC 03 */
+const TOKEN_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948']
+const tokenColor = i => TOKEN_COLORS[i % TOKEN_COLORS.length]
+function tint (hex, a) {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
+
+const tokens = ['Your', ' journey', ' starts', ' with', ' one', ' step']
+const visible = t => t.replace(/^ /, '␣')
+const LETTERS = 'abcdefghijkl'
+
+/* ================================================================
+   TEXT LAYOUT — a character-grid typesetter. Every run is recorded
+   in a registry so annotations can anchor to any piece of text.
+   ================================================================ */
+
+const FS = 20              // body font size
+const CW = FS * 0.6        // mono char width
+const LH = 36              // line height — roomy, the scribbles need air
+const HX = 70              // header / index-block left edge
+const X0 = 230             // body left edge — indented to leave a gutter for annotations
+const Y0 = 190             // body top baseline — leaves an annotation band under the header
+const MARGIN_X = X0 + 26 * CW   // margin-note column
+
+const runs = []   // { el, x, y, text, kind, dim, path, key, baseFill, baseOp }
+
+let lineIdx = 0
+let cursorChars = 0
+
+function newLine () { lineIdx++; cursorChars = 0 }
+function lineY (i = lineIdx) { return Y0 + i * LH }
+
+function put (text, opts = {}) {
+  const x = (opts.x !== undefined) ? opts.x : X0 + cursorChars * CW
+  const y = (opts.y !== undefined) ? opts.y : lineY()
+  const fill = opts.fill || INK
+  const el = make('text', { x, y, fill, 'font-size': opts.fs || FS })
+  el.style.fontFamily = MONO
+  if (opts.weight) el.setAttribute('font-weight', opts.weight)
+  el.textContent = text
+  if (opts.x === undefined) cursorChars += text.length
+  const run = { el, x, y, text, kind: opts.kind || 'plain', dim: opts.dim, path: opts.path, key: opts.key, baseFill: fill, baseOp: 1 }
+  runs.push(run)
+  return run
+}
+
+function bracket (ch, dim, path) {
+  return put(ch, { fill: DIMS[dim].color, weight: 700, kind: 'bracket', dim, path })
+}
+function letter (b, t, h) {
+  return put(LETTERS[t * 2 + h], { weight: 700, kind: 'letter', path: `b${b}.t${t}.h${h}`, key: `L:${b}.${t}.${h}` })
+}
+function marginNote (parts) {
+  let x = MARGIN_X
+  put('← ', { x, y: lineY(), fill: MUTED, kind: 'margin' })
+  x += 2 * CW
+  for (const p of parts) {
+    const r = put(p.text, { x, y: lineY(), fill: p.fill || INK_2, fs: 16, kind: 'margin', weight: p.weight })
+    x += p.text.length * 16 * 0.6
+  }
+}
+
+/* one token row: [[a], [b]] with heads/head_dim brackets + trailing comma */
+function tokenRow (b, t, trailingComma) {
+  bracket('[', 2, `b${b}.t${t}`)
+  bracket('[', 3, `b${b}.t${t}.h0`); letter(b, t, 0); bracket(']', 3, `b${b}.t${t}.h0`)
+  put(', ', { fill: MUTED })
+  bracket('[', 3, `b${b}.t${t}.h1`); letter(b, t, 1); bracket(']', 3, `b${b}.t${t}.h1`)
+  bracket(']', 2, `b${b}.t${t}`)
+  if (trailingComma) put(',', { fill: MUTED })
+}
+
+/* ---- header: shape with dimension chips + labeled legend ---- */
+const dimChipEls = []
+{
+  let x = HX
+  const hy = 62
+  const r0 = put('queries.shape = (', { x, y: hy, fs: 22 }); x += r0.text.length * 22 * 0.6
+  DIMS.forEach((d, di) => {
+    const txt = String(d.size)
+    const w = txt.length * 22 * 0.6 + 14
+    const chip = make('rect', { x: x - 4, y: hy - 20, width: w, height: 28, rx: 6, fill: tint(d.color, 0.16), stroke: d.color, 'stroke-width': 1.2 })
+    put(txt, { x: x + 3, y: hy, fs: 22, weight: 700 })
+    dimChipEls.push({ dim: di, els: [chip], hitX: x - 4, hitW: w, hitY: hy - 20 })
+    x += w + (di < 3 ? put(', ', { x: x + w - 4, y: hy, fs: 22, fill: MUTED }).text.length * 22 * 0.6 : 0)
+    x += 6
+  })
+  put(')', { x, y: hy, fs: 22 })
+
+  let lx = HX
+  const ly = 104
+  put('(', { x: lx, y: ly, fs: 15, fill: MUTED }); lx += 15 * 0.6
+  DIMS.forEach((d, di) => {
+    put('●', { x: lx, y: ly, fs: 12, fill: d.color }); lx += 14
+    const r = put(d.name, { x: lx, y: ly, fs: 15, fill: INK_2 }); lx += d.name.length * 15 * 0.6
+    dimChipEls[di].labelX = lx
+    if (di < 3) { put(', ', { x: lx, y: ly, fs: 15, fill: MUTED }); lx += 2 * 15 * 0.6 }
+  })
+  put(')', { x: lx, y: ly, fs: 15, fill: MUTED })
+}
+
+/* ---- body: the nested list, mirroring the ch03 notes' ASCII ---- */
+put('queries = ', {})
+bracket('[', 0, '')
+marginNote([{ text: 'batch dim — holds 2 batches', fill: INK_2 }])
+
+newLine()
+cursorChars = 2
+bracket('[', 1, 'b0')
+marginNote([{ text: 'Batch 0 — holds 6 tokens', fill: INK_2 }])
+
+tokens.forEach((tok, t) => {
+  newLine()
+  cursorChars = 4
+  tokenRow(0, t, t < 5)
+  const parts = [
+    { text: '● ', fill: tokenColor(t) },
+    { text: `"${visible(tok)}"`, fill: INK_2, weight: 600 },
+  ]
+  if (t === 0) parts.push({ text: '  — [a] head 0 · [b] head 1', fill: MUTED })
+  marginNote(parts)
+})
+
+newLine()
+cursorChars = 2
+bracket(']', 1, 'b0'); put(',', { fill: MUTED })
+marginNote([{ text: 'end Batch 0', fill: MUTED }])
+
+newLine()
+cursorChars = 2
+bracket('[', 1, 'b1')
+marginNote([{ text: 'Batch 1 — identical', fill: INK_2 }])
+
+newLine()
+cursorChars = 4
+for (let t = 0; t < 3; t++) { tokenRow(1, t, true); put(' ', {}) }
+newLine()
+cursorChars = 4
+for (let t = 3; t < 6; t++) { tokenRow(1, t, t < 5); if (t < 5) put(' ', {}) }
+
+newLine()
+cursorChars = 2
+bracket(']', 1, 'b1')
+marginNote([{ text: 'end Batch 1', fill: MUTED }])
+
+newLine()
+bracket(']', 0, '')
+
+/* ---- indexing block: hoverable, digits wear dimension chips ---- */
+const INDEX_EXAMPLES = [
+  { idx: [0, 0, 0, 0] }, { idx: [0, 0, 1, 0] }, { idx: [0, 1, 0, 0] }, { idx: [0, 1, 1, 0] },
+]
+const IY0 = lineY() + 78
+put('Indexing: queries[batch, token, head, head_dim]', { x: HX, y: IY0 - 40, fs: 16, fill: INK_2, weight: 600, kind: 'index' })
+
+const indexLines = []
+INDEX_EXAMPLES.forEach((ex, n) => {
+  const [b, t, h] = ex.idx
+  const y = IY0 + n * 36
+  let x = HX
+  put('queries[', { x, y, fs: 18, kind: 'index' }); x += 8 * 18 * 0.6
+  ex.idx.forEach((v, di) => {
+    make('rect', { x: x - 3, y: y - 16, width: 18 * 0.6 + 8, height: 24, rx: 5, fill: tint(DIMS[di].color, 0.18) })
+    put(String(v), { x, y, fs: 18, weight: 700, kind: 'index' }); x += 18 * 0.6 + 8
+    if (di < 3) { put(', ', { x, y, fs: 18, fill: MUTED, kind: 'index' }); x += 2 * 18 * 0.6 }
+  })
+  put('] = ', { x, y, fs: 18, kind: 'index' }); x += 4 * 18 * 0.6
+  put(LETTERS[t * 2 + h], { x, y, fs: 18, weight: 700, kind: 'index' })
+  const noteX = x + 3 * 18 * 0.6 + 10
+  put(`← batch ${b} · "${visible(tokens[t])}" · head ${h}`, { x: noteX, y, fs: 14, fill: MUTED, kind: 'index' })
+  indexLines.push({ b, t, h, y, endX: x + 18 * 0.6 })
+})
+
+/* ================================================================
+   HAND-DRAWN TEACHER MARKUP — seeded rough shapes (deterministic).
+   ================================================================ */
+
+function rng (seed) {
+  let s = seed >>> 0
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296 }
+}
+function roughEllipse (cx, cy, rx, ry, seed, color, parent = gScribble) {
+  for (let pass = 0; pass < 2; pass++) {
+    const r = rng(seed + pass * 7)
+    let d = ''
+    const n = 26
+    for (let k = 0; k <= n; k++) {
+      const th = (k / n) * Math.PI * 2 - Math.PI / 6
+      const jx = (r() - 0.5) * 3, jy = (r() - 0.5) * 3
+      const px = cx + Math.cos(th) * rx + jx
+      const py = cy + Math.sin(th) * ry + jy
+      d += (k === 0 ? 'M' : 'L') + px.toFixed(1) + ' ' + py.toFixed(1)
+    }
+    make('path', { d, fill: 'none', stroke: color, 'stroke-width': pass === 0 ? 1.8 : 1.1, opacity: pass === 0 ? 0.85 : 0.4, 'stroke-linecap': 'round' }, parent)
+  }
+}
+function roughArrow (x1, y1, x2, y2, seed, color, parent = gScribble) {
+  const r = rng(seed)
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2
+  const dx = x2 - x1, dy = y2 - y1
+  const len = Math.hypot(dx, dy) || 1
+  const bend = 0.18 * len
+  const cx = mx - (dy / len) * bend + (r() - 0.5) * 4
+  const cy = my + (dx / len) * bend + (r() - 0.5) * 4
+  const path = make('path', { d: `M${x1} ${y1} Q${cx} ${cy} ${x2} ${y2}`, fill: 'none', stroke: color, 'stroke-width': 1.7, 'stroke-linecap': 'round' }, parent)
+  const ang = Math.atan2(y2 - cy, x2 - cx)
+  const a1 = ang + Math.PI * 0.86, a2 = ang - Math.PI * 0.86
+  make('path', {
+    d: `M${x2} ${y2} L${x2 + Math.cos(a1) * 9} ${y2 + Math.sin(a1) * 9} M${x2} ${y2} L${x2 + Math.cos(a2) * 9} ${y2 + Math.sin(a2) * 9}`,
+    fill: 'none', stroke: color, 'stroke-width': 1.7, 'stroke-linecap': 'round',
+  }, parent)
+  return path
+}
+
+/* bounds of all runs whose path starts with a prefix */
+function boundsOf (predicate) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+  for (const r of runs) {
+    if (!predicate(r)) continue
+    x1 = Math.min(x1, r.x); x2 = Math.max(x2, r.x + r.text.length * CW)
+    y1 = Math.min(y1, r.y - FS * 0.75); y2 = Math.max(y2, r.y + FS * 0.25)
+  }
+  return { x1, y1, x2, y2, cx: (x1 + x2) / 2, cy: (y1 + y2) / 2 }
+}
+
+/* markup 1 — ellipse around batch-0 row 0 ([[a], [b]]), note in the annotation
+   band between the legend and the body, arrow angling down-left to the ellipse */
+{
+  const bb = boundsOf(r => r.path && r.path.startsWith('b0.t0') && r.kind !== 'margin')
+  roughEllipse(bb.cx, bb.cy, (bb.x2 - bb.x1) / 2 + 16, LH * 0.62, 11, INK_2)
+  const lx = 560, ly = 128
+  const t = make('text', { x: lx, y: ly, fill: INK_2, 'font-size': 15, 'font-style': 'italic' }, gScribble)
+  t.textContent = 'one token = 2 heads × (1 value each)'
+  roughArrow(lx + 8, ly + 12, bb.x2 + 28, bb.cy - 6, 23, INK_2)
+}
+
+/* markup 2 — lasso around head-0's column in batch 0; the note lives in the
+   left gutter beside the column, arrow running straight into the lasso's side */
+{
+  const HEAD0 = DIMS[2].color
+  const ls = runs.filter(r => r.key && /^L:0\.\d\.0$/.test(r.key))
+  const x1 = Math.min(...ls.map(r => r.x)) - 10
+  const x2 = Math.max(...ls.map(r => r.x + CW)) + 10
+  const y1 = Math.min(...ls.map(r => r.y)) - FS * 0.9
+  const y2 = Math.max(...ls.map(r => r.y)) + FS * 0.35
+  const cyL = (y1 + y2) / 2
+  roughEllipse((x1 + x2) / 2, cyL, (x2 - x1) / 2 + 4, (y2 - y1) / 2 + 8, 31, HEAD0)
+  const noteLines = ['head 0’s slots —', '.transpose(1, 2)', 'gathers these']
+  noteLines.forEach((txt, k) => {
+    const t = make('text', { x: 56, y: cyL - 28 + k * 20, fill: INK_2, 'font-size': 14, 'font-style': 'italic' }, gScribble)
+    t.textContent = txt
+  })
+  roughArrow(190, cyL + 34, x1 - 6, cyL + 6, 43, HEAD0)
+}
+
+/* ================================================================
+   INTERACTIVITY — path highlighting, dim highlighting, index tracing.
+   ================================================================ */
+
+const readout = document.getElementById('readout')
+
+function matchPath (runPath, letterPath) {
+  return runPath === '' || letterPath === runPath || letterPath.startsWith(runPath + '.')
+}
+
+function clearFocus () {
+  for (const r of runs) { r.el.setAttribute('opacity', 1) }
+  gWash.innerHTML = ''
+  gDynamic.innerHTML = ''
+  readout.textContent = 'hover something…'
+}
+
+function focusLetter (b, t, h, drawArrowFrom) {
+  clearFocus()
+  const letterPath = `b${b}.t${t}.h${h}`
+  for (const r of runs) {
+    if (r.kind === 'index') { r.el.setAttribute('opacity', 0.9); continue }
+    if (r.kind === 'margin') { r.el.setAttribute('opacity', 0.35); continue }
+    if (r.kind === 'bracket') { r.el.setAttribute('opacity', matchPath(r.path, letterPath) ? 1 : 0.18); continue }
+    if (r.kind === 'letter') { r.el.setAttribute('opacity', r.path === letterPath ? 1 : 0.18); continue }
+    r.el.setAttribute('opacity', 0.35)
+  }
+  const target = runs.find(r => r.key === `L:${b}.${t}.${h}`)
+  if (target) {
+    make('rect', {
+      x: target.x - 4, y: target.y - FS * 0.85, width: CW + 8, height: FS * 1.15, rx: 5,
+      fill: tint(tokenColor(t), 0.28),
+    }, gWash)
+    if (drawArrowFrom) {
+      const a = roughArrow(drawArrowFrom.x, drawArrowFrom.y, target.x + CW / 2 + 8, target.y + 6, 57, INK_2, gDynamic)
+      a.classList.add('fade-in')
+    }
+  }
+  readout.innerHTML = `<span style="color:${tokenColor(t)}">●</span> queries[${b}, ${t}, ${h}, 0] = ${LETTERS[t * 2 + h]} · batch ${b} · "${visible(tokens[t])}" · head ${h}`
+}
+
+function focusDim (di) {
+  clearFocus()
+  for (const r of runs) {
+    if (r.kind === 'bracket') { r.el.setAttribute('opacity', r.dim === di ? 1 : 0.15); continue }
+    r.el.setAttribute('opacity', r.kind === 'index' ? 0.9 : 0.35)
+  }
+  readout.innerHTML = `<span style="color:${DIMS[di].color}">●</span> dim ${di} — ${DIMS[di].name}: every bracket this color holds ${DIMS[di].size} item${DIMS[di].size > 1 ? 's' : ''}`
+}
+
+/* hit areas: letters */
+for (const r of runs) {
+  if (r.kind !== 'letter') continue
+  const hit = make('rect', { x: r.x - 5, y: r.y - FS * 0.9, width: CW + 10, height: FS * 1.3, fill: 'transparent' }, gDynamic.parentNode)
+  hit.style.cursor = 'default'
+  const [b, t, h] = r.path.match(/\d+/g).map(Number)
+  hit.addEventListener('pointerenter', () => focusLetter(b, t, h))
+  hit.addEventListener('pointerleave', clearFocus)
+}
+/* hit areas: dim chips + legend words */
+dimChipEls.forEach((c, di) => {
+  const hit = make('rect', { x: c.hitX - 2, y: c.hitY - 2, width: c.hitW + 4, height: 32, fill: 'transparent' }, gDynamic.parentNode)
+  hit.addEventListener('pointerenter', () => focusDim(di))
+  hit.addEventListener('pointerleave', clearFocus)
+})
+/* hit areas: index lines (trace with an arrow) */
+indexLines.forEach(l => {
+  const hit = make('rect', { x: HX - 6, y: l.y - 20, width: 560, height: 34, fill: 'transparent' }, gDynamic.parentNode)
+  hit.addEventListener('pointerenter', () => focusLetter(l.b, l.t, l.h, { x: l.endX + 6, y: l.y - 8 }))
+  hit.addEventListener('pointerleave', clearFocus)
+})
+</script>
+</body>
+</html>

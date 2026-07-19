@@ -713,3 +713,248 @@ connecting arrow is drawn automatically either way. Try clicking `Feed forward` 
     </div>
   </ArrowOverlay>
 </DetailRailProvider>
+
+## TokenJourney — text → tokens → IDs → embeddings
+
+Drills through *stages of representation* rather than tensor dimensions: click a batch
+row to unfold its tokens, a token chip to see its ID, and "embedding" to see the vector.
+Parents stay visible as each stage unfolds, a breadcrumb tracks the current path, and
+every token ID gets one deterministic color used everywhere it appears (same ID → same
+color, on this page and any other). Leading spaces in BPE tokens render as `␣`.
+
+```jsx
+<TokenJourney
+  sequences={[
+    {
+      label: 'batch 0',
+      text: 'Your journey starts',
+      tokens: [
+        { text: 'Your', id: 7120, embedding: [0.43, 0.15, 0.89] },
+        { text: ' journey', id: 7002, embedding: [0.55, 0.87, 0.66] },
+        { text: ' starts', id: 4940, embedding: [0.57, 0.85, 0.64] },
+      ],
+    },
+    {
+      label: 'batch 1',
+      text: 'Every effort moves',
+      tokens: [
+        { text: 'Every', id: 6109, embedding: [0.12, 0.61, 0.35] },
+        { text: ' effort', id: 3626, embedding: [0.48, 0.09, 0.77] },
+        { text: ' moves', id: 6100, embedding: [0.83, 0.44, 0.21] },
+      ],
+    },
+  ]}
+/>
+```
+
+<TokenJourney
+  sequences={[
+    {
+      label: 'batch 0',
+      text: 'Your journey starts',
+      tokens: [
+        { text: 'Your', id: 7120, embedding: [0.43, 0.15, 0.89] },
+        { text: ' journey', id: 7002, embedding: [0.55, 0.87, 0.66] },
+        { text: ' starts', id: 4940, embedding: [0.57, 0.85, 0.64] },
+      ],
+    },
+    {
+      label: 'batch 1',
+      text: 'Every effort moves',
+      tokens: [
+        { text: 'Every', id: 6109, embedding: [0.12, 0.61, 0.35] },
+        { text: ' effort', id: 3626, embedding: [0.48, 0.09, 0.77] },
+        { text: ' moves', id: 6100, embedding: [0.83, 0.44, 0.21] },
+      ],
+    },
+  ]}
+/>
+
+## TensorDive — semantic zoom into a 4D tensor
+
+A tensor rendered as true nested containment — batches contain token boxes, which
+contain head boxes, which contain value leaves. Click a box to dive the camera one
+level inside; click empty space (or press Esc) to rise back out. Breadcrumbs and a
+live `queries[·, ·, ·, ·]` index bar track the path — each click chooses one index of
+one dimension, so diving through the tensor *is* indexing it. Labels fade in and out
+per zoom band, so no level's text clutters another level's view.
+
+```jsx
+<TensorDive
+  name="queries"
+  levels={[
+    { name: 'batch' },
+    {
+      name: 'tokens',
+      indexLabels: ['Your', '␣journey', '␣starts', '␣with', '␣one', '␣step'],
+    },
+    { name: 'heads' },
+    { name: 'head_dim' },
+  ]}
+  values={[
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+  ]}
+  colorDim={1}
+  dashDim={2}
+/>
+```
+
+<TensorDive
+  name="queries"
+  levels={[
+    { name: 'batch' },
+    {
+      name: 'tokens',
+      indexLabels: ['Your', '␣journey', '␣starts', '␣with', '␣one', '␣step'],
+    },
+    { name: 'heads' },
+    { name: 'head_dim' },
+  ]}
+  values={[
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+  ]}
+  colorDim={1}
+  dashDim={2}
+/>
+
+## BracketDiagram — annotated bracket notation
+
+The nested-list bracket notation from the notes (`queries = [ [ [[a], [b]], … ] ]`),
+typeset live instead of hand-drawn ASCII. Brackets are colored by the dimension they
+open — hover a shape chip in the header to isolate every bracket of that dimension.
+Margin notes carry per-token identity dots. Hand-drawn "teacher scribble" ellipses and
+arrows call out specific regions (anchored to index constraints, not pixels). The
+"Indexing:" block at the bottom traces an arrow to the exact value on hover, and
+hovering any letter directly lights up its own enclosing bracket path.
+
+```jsx
+<BracketDiagram
+  name="queries"
+  levels={[
+    { name: 'batch' },
+    {
+      name: 'tokens',
+      indexLabels: ['Your', '␣journey', '␣starts', '␣with', '␣one', '␣step'],
+    },
+    { name: 'heads' },
+    { name: 'head_dim' },
+  ]}
+  values={[
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+  ]}
+  annotations={[
+    {
+      target: [0, 0, null, null],
+      label: 'one token = 2 heads × (1 value each)',
+      side: 'above',
+    },
+    {
+      target: [0, null, 0, null],
+      label: 'head 0’s slots — .transpose(1, 2) gathers these',
+      side: 'left',
+      color: '#eb6834',
+    },
+  ]}
+  indexExamples={[
+    [0, 0, 0, 0],
+    [0, 0, 1, 0],
+    [0, 1, 0, 0],
+    [0, 1, 1, 0],
+  ]}
+/>
+```
+
+<BracketDiagram
+  name="queries"
+  levels={[
+    { name: 'batch' },
+    {
+      name: 'tokens',
+      indexLabels: ['Your', '␣journey', '␣starts', '␣with', '␣one', '␣step'],
+    },
+    { name: 'heads' },
+    { name: 'head_dim' },
+  ]}
+  values={[
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+    [
+      [['a'], ['b']],
+      [['c'], ['d']],
+      [['e'], ['f']],
+      [['g'], ['h']],
+      [['i'], ['j']],
+      [['k'], ['l']],
+    ],
+  ]}
+  annotations={[
+    {
+      target: [0, 0, null, null],
+      label: 'one token = 2 heads × (1 value each)',
+      side: 'above',
+    },
+    {
+      target: [0, null, 0, null],
+      label: 'head 0’s slots — .transpose(1, 2) gathers these',
+      side: 'left',
+      color: '#eb6834',
+    },
+  ]}
+  indexExamples={[
+    [0, 0, 0, 0],
+    [0, 0, 1, 0],
+    [0, 1, 0, 0],
+    [0, 1, 1, 0],
+  ]}
+/>

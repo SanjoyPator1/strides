@@ -232,6 +232,9 @@ importers:
       '@strides/viz':
         specifier: workspace:*
         version: link:../viz
+      motion:
+        specifier: ^12.42.2
+        version: 12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7
