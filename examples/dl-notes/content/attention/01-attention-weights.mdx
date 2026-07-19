@@ -150,3 +150,142 @@ Hover a cell to see exactly how much a query token attends to a key token, and c
 row sums to 1 — softmax's whole job:
 
 <AttentionHeatmap weights={weights} tokens={tokens} />
+
+## Bonus: splitting into multiple heads
+
+Everything above used one attention head over the full `d_model=8` width. Real transformers
+usually split that width into several smaller heads instead, so each head can specialize —
+GPT-2 small uses 12 heads of 64 dims each, for example. Nothing above actually computes with
+multiple heads (that's still one head end to end), but here's the reshape multi-head attention
+does before splitting off into separate attention computations, applied to the real
+`Q` matrix from the setup cell (`n=6` tokens, `d_model=8`, split into 4 heads of `head_dim=2`):
+
+export const qProjected = [
+  [0.22, -0.33, -0.07, -0.02, 0.19, 0.01, 0.07, -0.08],
+  [-0.22, 0.12, 0.06, 0.25, -0.17, 0.06, 0.29, 0.17],
+  [-0.12, -0.02, 0.15, 0.12, 0.12, -0.12, -0.02, -0.04],
+  [0.39, -0.48, 0.04, -0.16, 0.16, 0.53, -0.16, 0.03],
+  [-0.33, 0.13, 0.08, -0.06, -0.17, -0.18, -0.09, 0.13],
+  [0.36, 0.02, -0.18, -0.1, 0.44, -0.11, -0.05, -0.23],
+]
+
+<HeadSplitViz numHeads={4} tokenLabels={tokens} values={qProjected} />
+
+`HeadSplitViz` shows the reshape for one sequence. The *real* shape a batched forward pass
+works with has one more axis on top — `(batch, tokens, heads, head_dim)` — because a training
+step processes many sequences at once, not just one. `TensorExplorer` drills through all four
+axes at once: click a group to open it, all the way down to the real numbers above. The two
+batches below are identical on purpose, echoing how the reference MultiHeadAttention
+walkthrough builds its own toy batch — `torch.stack((inputs, inputs))` — so you can see that
+duplication directly in the tree (a real batch would obviously hold different sequences):
+
+export const qHeads = [
+  [[0.22, -0.33], [-0.07, -0.02], [0.19, 0.01], [0.07, -0.08]],
+  [[-0.22, 0.12], [0.06, 0.25], [-0.17, 0.06], [0.29, 0.17]],
+  [[-0.12, -0.02], [0.15, 0.12], [0.12, -0.12], [-0.02, -0.04]],
+  [[0.39, -0.48], [0.04, -0.16], [0.16, 0.53], [-0.16, 0.03]],
+  [[-0.33, 0.13], [0.08, -0.06], [-0.17, -0.18], [-0.09, 0.13]],
+  [[0.36, 0.02], [-0.18, -0.1], [0.44, -0.11], [-0.05, -0.23]],
+]
+
+<TensorExplorer
+  axisLabels={['Batch', 'Token', 'Head']}
+  axisIndexLabels={[undefined, tokens, ['Head 0', 'Head 1', 'Head 2', 'Head 3']]}
+  values={[qHeads, qHeads]}
+/>
+
+## Where this fits: the full GPT model
+
+Everything on this page — Q/K/V, the causal mask, softmax — is one box (`Masked
+multi-head attention`) inside one block, repeated many times. Here's the complete model
+that block lives in, end to end, built from `Group`/`Node`/`Arrow` the same way as the
+gallery examples — the two shortcut connections are what let the input skip past attention
+and the feed-forward layer untouched, so the network can learn to use as much or as little
+of each block as it needs. **Click `Masked multi-head attention` or `Feed forward`** to
+expand what's actually inside them, beside the main diagram:
+
+<DetailRailProvider>
+<ArrowOverlay>
+  <div style={{ display: 'flex', gap: '2.5rem', alignItems: 'stretch', flexWrap: 'wrap' }}>
+    <div className="strides-annotation-column">
+      <Anchor name="note-tokenize" className="strides-annotation">
+        Raw text is split into tokens, then each token ID looks up a learned embedding vector.
+      </Anchor>
+      <Anchor name="note-repeat" className="strides-annotation">
+        This whole block repeats 12 times in GPT-2 small — each copy has its own learned weights.
+      </Anchor>
+      <Anchor name="note-output" className="strides-annotation">
+        One 50,257-way probability distribution per input token — the model's guess at what comes next.
+      </Anchor>
+    </div>
+
+    <Group label="GPT model" color="#f3f4f6">
+      <Node anchor="raw-text" shape="pill">"The cat sat on the mat"</Node>
+      <Node anchor="tok-text" shape="pill">Tokenized text</Node>
+      <Node anchor="tok-emb" shape="rect">Token embedding layer</Node>
+      <Node anchor="pos-emb" shape="rect">Positional embedding layer</Node>
+      <Node anchor="drop0" shape="pill">Dropout</Node>
+      <Group label="Transformer block" color="#bfdbfe" repeat={12}>
+        <Node anchor="ln1" shape="rect">LayerNorm 1</Node>
+        <Detail
+          summary={
+            <Node anchor="attn" shape="rect" color="#374151" textColor="#ffffff">
+              Masked multi-head attention
+            </Node>
+          }
+          label="Masked multi-head attention, in detail"
+          color="#fecaca"
+        >
+          <Node shape="trapezoid">Linear → Q, K, V</Node>
+          <Node shape="rect">Scaled dot-product scores</Node>
+          <Node shape="rect">Causal mask + softmax</Node>
+          <Node shape="pill">Dropout</Node>
+          <Node shape="trapezoid">Linear (output)</Node>
+        </Detail>
+        <Node anchor="drop1" shape="pill">Dropout</Node>
+        <Node anchor="add1" shape="circle">+</Node>
+        <Node anchor="ln2" shape="rect">LayerNorm 2</Node>
+        <Detail
+          summary={<Node anchor="ff" shape="rect">Feed forward</Node>}
+          label="Feed forward, in detail"
+          color="#ede9fe"
+        >
+          <Node shape="trapezoid" color="#a5f3fc">Linear</Node>
+          <Node shape="rect" color="#fed7aa">GELU</Node>
+          <Node shape="trapezoid" color="#a5f3fc">Linear</Node>
+        </Detail>
+        <Node anchor="drop2" shape="pill">Dropout</Node>
+        <Node anchor="add2" shape="circle">+</Node>
+      </Group>
+      <Node anchor="final-ln" shape="rect">Final LayerNorm</Node>
+      <Node anchor="linear-out" shape="rect">Linear output layer</Node>
+      <Node anchor="output" shape="pill">Output logits</Node>
+    </Group>
+
+    <DetailRail />
+  </div>
+
+  <Arrow from="raw-text" to="tok-text" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="tok-text" to="tok-emb" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="tok-emb" to="pos-emb" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="pos-emb" to="drop0" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="drop0" to="ln1" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="ln1" to="attn" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="attn" to="drop1" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="drop1" to="add1" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="add1" to="ln2" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="ln2" to="ff" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="ff" to="drop2" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="drop2" to="add2" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="add2" to="final-ln" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="final-ln" to="linear-out" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="linear-out" to="output" path="straight" fromSide="bottom" toSide="top" />
+
+  <Arrow from="note-tokenize" to="tok-emb" path="curved" color="#9ca3af" />
+  <Arrow from="note-repeat" to="ln1" path="curved" color="#9ca3af" />
+  <Arrow from="note-output" to="output" path="curved" color="#9ca3af" />
+
+  <Arrow from="drop0" to="add1" path="elbow" fromSide="right" toSide="right" label="shortcut" />
+  <Arrow from="add1" to="add2" path="elbow" fromSide="right" toSide="right" label="shortcut" />
+</ArrowOverlay>
+</DetailRailProvider>
