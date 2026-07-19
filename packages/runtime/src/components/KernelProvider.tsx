@@ -16,6 +16,7 @@ export interface KernelContextValue {
   status: KernelStatus
   registerCell: (index: number, code: string) => void
   getCellState: (index: number) => { state: CellState; outputs: CellOutput[] }
+  updateCellCode: (index: number, code: string) => void
   run: (index: number) => Promise<void>
   restart: () => Promise<void>
 }
@@ -84,6 +85,13 @@ export function KernelProvider({ gatewayUrl, children }: KernelProviderProps) {
 
       getCellState(index) {
         return cellsRef.current.get(index) ?? { state: 'idle', outputs: [] }
+      },
+
+      /** Overwrites a cell's code (in-browser editing) and resets it to idle so `run` re-executes it. */
+      updateCellCode(index, code) {
+        const current = cellsRef.current.get(index)
+        cellsRef.current.set(index, { code, state: 'idle', outputs: current?.outputs ?? [] })
+        forceRender()
       },
 
       async run(targetIndex) {

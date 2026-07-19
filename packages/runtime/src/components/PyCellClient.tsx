@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useKernel } from './KernelProvider'
 import { OutputView } from './OutputView'
 import type { CellOutput, CellState } from '../output-types'
@@ -24,6 +24,7 @@ const STATE_LABEL: Record<CellState, string> = {
 
 export function PyCellClient({ index, code, highlightedHtml, frozenOutputs, isStale, hasSnapshot }: PyCellClientProps) {
   const kernel = useKernel()
+  const [draft, setDraft] = useState(code)
 
   useEffect(() => {
     kernel?.registerCell(index, code)
@@ -33,18 +34,35 @@ export function PyCellClient({ index, code, highlightedHtml, frozenOutputs, isSt
 
   const live = kernel && kernel.status === 'ready' ? kernel.getCellState(index) : null
   const showLive = live !== null && live.state !== 'idle'
+  const editable = kernel !== null && kernel.status === 'ready'
+
+  const handleRun = () => {
+    if (!kernel) return
+    kernel.updateCellCode(index, draft)
+    kernel.run(index)
+  }
 
   return (
     <div className="strides-py-cell">
-      <div className="strides-py-cell-code" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+      {editable ? (
+        <textarea
+          className="strides-py-cell-editor"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          spellCheck={false}
+          rows={Math.max(3, draft.split('\n').length)}
+        />
+      ) : (
+        <div className="strides-py-cell-code" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+      )}
 
-      {kernel && kernel.status === 'ready' ? (
+      {editable ? (
         <div className="strides-py-cell-strip">
           <button
             type="button"
             className="strides-py-cell-run"
             disabled={live?.state === 'queued' || live?.state === 'running'}
-            onClick={() => kernel.run(index)}
+            onClick={handleRun}
           >
             ▶ Run
           </button>
