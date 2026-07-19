@@ -9,9 +9,10 @@ Numbered design and implementation documents for strides. Each doc states its st
 | 03 | [MVP specification](03-mvp-spec.md) | Exact scope and behavior of the first MVP |
 | 04 | [MVP implementation plan](04-mvp-implementation-plan.md) | Phased build plan with tasks, dependencies, and verification |
 | 05 | [Implementation status](05-implementation-status.md) | Living progress tracker — updated as phases complete |
+| 06 | [Visualization components log](06-visualization-components-log.md) | Build log for the visualization component library — what got built, bugs found and fixed, current state |
 
 Conventions:
 
-- New docs take the next number (`05-….md`). Existing docs are never renumbered.
+- New docs take the next number (`06-….md`). Existing docs are never renumbered.
 - Docs are self-contained: an engineer should be able to implement from them without other context.
 - When a decision changes, update the decision log in doc 01 and note the change in the affected doc rather than rewriting history.
