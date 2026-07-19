@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { scaleDiverging, scaleSequential } from 'd3-scale'
 import { interpolateRgb, piecewise } from 'd3-interpolate'
 
@@ -14,20 +14,34 @@ const VAR_NAMES = [
 
 type VarName = (typeof VAR_NAMES)[number]
 
+const FALLBACK_COLOR = '#888888'
+
+// A plain literal, not a function call: the initial render must produce the exact same
+// value on the server and on the client's first (pre-hydration) pass, or React flags a
+// hydration mismatch. Real CSS values are only readable client-side, so they're deferred
+// to useLayoutEffect below, same as next-themes' own "mounted" pattern for ThemeToggle.
+const FALLBACK_COLORS: Record<VarName, string> = {
+  '--strides-viz-sequential-low': FALLBACK_COLOR,
+  '--strides-viz-sequential-high': FALLBACK_COLOR,
+  '--strides-viz-diverging-low': FALLBACK_COLOR,
+  '--strides-viz-diverging-mid': FALLBACK_COLOR,
+  '--strides-viz-diverging-high': FALLBACK_COLOR,
+}
+
 function readCssVars(): Record<VarName, string> {
-  const styles = typeof window === 'undefined' ? null : getComputedStyle(document.documentElement)
+  const styles = getComputedStyle(document.documentElement)
   const result = {} as Record<VarName, string>
   for (const name of VAR_NAMES) {
-    result[name] = styles?.getPropertyValue(name).trim() || '#888888'
+    result[name] = styles.getPropertyValue(name).trim() || FALLBACK_COLOR
   }
   return result
 }
 
 /** Re-reads strides' viz color variables whenever <html>'s class changes (e.g. dark-mode toggle). */
 function useVizColors(): Record<VarName, string> {
-  const [colors, setColors] = useState(readCssVars)
+  const [colors, setColors] = useState<Record<VarName, string>>(FALLBACK_COLORS)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const read = () => setColors(readCssVars())
     read()
     const observer = new MutationObserver(read)
