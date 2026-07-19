@@ -339,6 +339,302 @@ a {
   fill: var(--strides-color-muted);
 }
 
+.strides-matrix-group {
+  fill-opacity: 0.15;
+  stroke-opacity: 0.9;
+  stroke-width: 1.5;
+}
+
+.strides-matrix-group-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.strides-tensor-slices {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.strides-tensor-slices--stack {
+  display: block;
+  /* Extra clearance above/below: a focused card lifts out of the stack (translateY + shadow),
+     which needs more headroom than the deck's own layout box provides. */
+  margin: 1.5rem 0 2rem;
+}
+
+.strides-tensor-slice {
+  border: 1.5px solid var(--strides-color-border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: var(--strides-color-bg);
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.strides-tensor-slice--focusable {
+  cursor: pointer;
+}
+
+.strides-tensor-slice--focused {
+  transform: scale(1.05);
+  position: relative;
+}
+
+/* In the deck-of-cards layout, a focused card needs more than z-index to read as "brought to
+   the front" — it also lifts up and out of the stack (translate, not just scale) and gets a
+   shadow, so it's unambiguously separated from the cards it was previously buried under. */
+.strides-tensor-slices--stack .strides-tensor-slice--focused {
+  transform: scale(1.08) translateY(-14px);
+  box-shadow: 0 10px 24px -8px rgb(0 0 0 / 0.35);
+}
+
+.strides-tensor-slice--dimmed {
+  opacity: 0.35;
+}
+
+.strides-tensor-slice-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  text-align: center;
+}
+
+.strides-tabs {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: center;
+  margin: 0.75rem 0;
+}
+
+.strides-tab {
+  background: none;
+  border: 1px solid var(--strides-color-border);
+  border-radius: 6px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--strides-color-fg);
+  cursor: pointer;
+}
+
+.strides-tab--active {
+  background: var(--strides-color-accent);
+  color: var(--strides-color-bg);
+  border-color: var(--strides-color-accent);
+}
+
+.strides-headsplit-error {
+  color: #b91c1c;
+  font-size: 0.9rem;
+}
+
+.strides-tensor-explorer {
+  margin: 1rem 0;
+}
+
+.strides-tensor-explorer-level--row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.strides-tensor-explorer-level--column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.strides-tensor-explorer-group {
+  border: 1.5px solid var(--strides-color-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  background: var(--strides-color-bg);
+  align-self: flex-start;
+}
+
+.strides-tensor-explorer-toggle {
+  background: none;
+  border: none;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.strides-tensor-explorer-caret {
+  font-size: 0.65rem;
+}
+
+.strides-tensor-explorer-children {
+  margin-top: 0.5rem;
+  padding-left: 0.85rem;
+  border-left: 2px solid var(--strides-color-border);
+}
+
+.strides-node {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+  min-height: 2.5rem;
+  line-height: 1.2;
+  border: 1px solid rgb(0 0 0 / 0.15);
+  background: var(--strides-color-surface);
+  color: var(--strides-color-fg);
+}
+
+.strides-node--rect {
+  border-radius: 10px;
+}
+
+.strides-node--pill {
+  border-radius: 999px;
+}
+
+.strides-node--circle {
+  border-radius: 50%;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+}
+
+.strides-node--hexagon {
+  clip-path: polygon(10% 0%, 90% 0%, 100% 50%, 90% 100%, 10% 100%, 0% 50%);
+  padding: 0.55rem 2rem;
+}
+
+.strides-node--trapezoid {
+  clip-path: polygon(18% 0%, 82% 0%, 100% 100%, 0% 100%);
+  padding: 0.55rem 1.75rem;
+}
+
+.strides-node-group {
+  border-radius: 12px;
+  padding: 1.25rem;
+  background: var(--strides-color-surface);
+}
+
+.strides-node-group-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--strides-color-muted);
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+
+.strides-node-group-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.strides-node-group-repeat-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.strides-node-group-repeat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  color: var(--strides-color-muted);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.strides-node-group-repeat-brace {
+  font-size: 2.5rem;
+  font-weight: 400;
+  line-height: 1;
+  transform: scaleY(1.4);
+}
+
+.strides-flow {
+  margin: 1.5rem 0;
+}
+
+.strides-detail-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.strides-detail-trigger .strides-node {
+  outline: 2px dashed transparent;
+  outline-offset: 2px;
+  transition: outline-color 0.15s;
+}
+
+.strides-detail-trigger:hover .strides-node,
+.strides-detail-trigger--open .strides-node {
+  outline-color: var(--strides-color-accent);
+}
+
+.strides-detail-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--strides-color-accent);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.strides-detail-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.strides-detail-panel {
+  min-width: 180px;
+}
+
+.strides-annotation-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2rem;
+  max-width: 170px;
+  padding: 2rem 0;
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+.strides-annotation {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--strides-color-muted);
+  line-height: 1.4;
+}
+
 .strides-scene {
   margin: 1.5rem 0;
   outline: none;
@@ -416,6 +712,41 @@ a {
 
 .strides-attention-tooltip-hint {
   color: var(--strides-color-muted);
+}
+
+.strides-arrow-overlay {
+  position: relative;
+}
+
+.strides-anchor {
+  display: inline-block;
+}
+
+.strides-arrow-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.strides-arrow-path {
+  stroke: var(--strides-color-accent);
+  stroke-width: 2;
+}
+
+.strides-arrow-marker {
+  fill: var(--strides-color-accent);
+}
+
+.strides-arrow-label {
+  font-size: 0.75rem;
+  fill: var(--strides-color-fg);
+  paint-order: stroke;
+  stroke: var(--strides-color-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 
 @media (max-width: 767px) {
