@@ -1,0 +1,152 @@
+---
+title: Batching instructions
+description: Instruction fine-tuning requires a special data format and a smarter collate function — the model must learn to generate responses but not to reproduce the instruction it was given.
+---
+
+Classification fine-tuning (E14) is binary: spam or not. Instruction fine-tuning is
+far richer: given a natural-language instruction, the model should generate a useful
+natural-language response.
+
+The key challenge is the data pipeline: we need to construct inputs and targets where
+the model is *trained only on the response* — not on the instruction itself.
+
+## The Alpaca format
+
+```json
+{
+  "instruction": "What is the capital of France?",
+  "input": "",
+  "response": "The capital of France is Paris."
+}
+```
+
+The instruction (and optional input) form the *prompt*. The response is what we want
+the model to generate. We wrap them in a structured template:
+
+```python cell
+def format_input(entry):
+    instruction_text = (
+        f"Below is an instruction that describes a task. "
+        f"Write a response that appropriately completes the request.\n\n"
+        f"### Instruction:\n{entry['instruction']}"
+    )
+    input_text = (
+        f"\n\n### Input:\n{entry['input']}" if entry.get("input") else ""
+    )
+    return instruction_text + input_text
+
+def format_full(entry):
+    return format_input(entry) + f"\n\n### Response:\n{entry['response']}"
+```
+
+## The −100 masking trick
+
+During training, the model sees the full text (instruction + response) as `input_ids`.
+The `target_ids` are the same sequence shifted by one. But we only want the model to
+learn from positions where it's generating the *response* — not from positions where
+it's "copying" the instruction.
+
+We do this by setting instruction positions in `target_ids` to **−100**, which
+`F.cross_entropy` ignores:
+
+```python cell
+import torch
+
+instruction_length = 47   # number of tokens in the prompt
+target_ids = input_ids.clone()
+target_ids[:instruction_length] = -100   # ignore these positions in the loss
+
+# F.cross_entropy ignores position where target == -100
+loss = F.cross_entropy(logits.flatten(0,1), target_ids.flatten(),
+                       ignore_index=-100)
+```
+
+export const tokenRoles = [[1],[1],[1],[1],[1],[1],[0],[0],[0],[0],[0]]
+export const lossWeights = [[0],[0],[0],[0],[0],[0],[1],[1],[1],[1],[1]]
+export const posLabels = ["Below","is","an","instruc","...","###Resp:","The","capital","of","France","is"]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="Full input sequence — instruction tokens (blue) + response tokens (dark).">
+    <Matrix id="mask" values={tokenRoles} rowLabels={posLabels} colLabels={["role"]} colorScale="sequential" precision={0} cellSize={56} />
+  </Step>
+  <Step caption="Loss mask — instruction positions set to -100 (ignored). Only response positions contribute to gradients.">
+    <Matrix id="mask" values={lossWeights} rowLabels={posLabels} colLabels={["contributes"]} colorScale="sequential" precision={0} cellSize={56} />
+  </Step>
+</Scene>
+
+## Custom collate function
+
+Instruction sequences vary in length. The collate function pads short sequences with
+the `<|endoftext|>` token (ID 50256) so they can be batched, and extends the −100
+mask to cover padding positions too:
+
+```python cell
+def custom_collate(batch, pad_token_id=50256, ignore_index=-100,
+                   allowed_max_length=None, device="cpu"):
+    # Find longest sequence in this batch
+    batch_max_length = max(len(item) + 1 for item in batch)
+    inputs_lst, targets_lst = [], []
+
+    for item in batch:
+        new_item = item.copy()
+        new_item += [pad_token_id]                  # append <|endoftext|>
+        padded = new_item + [pad_token_id] * (batch_max_length - len(new_item))
+
+        inputs  = torch.tensor(padded[:-1])          # all but last token
+        targets = torch.tensor(padded[1:])           # all but first token
+
+        # Mask padding in targets
+        mask = targets == pad_token_id
+        indices = torch.nonzero(mask).squeeze()
+        if indices.numel() > 1:
+            targets[indices[1:]] = ignore_index      # keep first EOS, mask rest
+
+        if allowed_max_length is not None:
+            inputs  = inputs[:allowed_max_length]
+            targets = targets[:allowed_max_length]
+
+        inputs_lst.append(inputs)
+        targets_lst.append(targets)
+
+    inputs_tensor  = torch.stack(inputs_lst).to(device)
+    targets_tensor = torch.stack(targets_lst).to(device)
+    return inputs_tensor, targets_tensor
+```
+
+The first `<|endoftext|>` in targets is kept (it signals end-of-response to the model).
+Subsequent padding tokens are masked to −100 — the model shouldn't try to predict
+`<|endoftext|>` after it's already ended.
+
+## Dataset and loader
+
+```python cell
+from torch.utils.data import Dataset, DataLoader
+from functools import partial
+
+class InstructionDataset(Dataset):
+    def __init__(self, data, tokenizer):
+        self.data    = data
+        self.encoded = [
+            tokenizer.encode(format_full(entry)) for entry in data
+        ]
+
+    def __getitem__(self, idx):
+        return self.encoded[idx]
+
+    def __len__(self):
+        return len(self.data)
+
+collate_fn = partial(custom_collate, device="cpu", allowed_max_length=1024)
+
+train_loader = DataLoader(
+    InstructionDataset(train_data, tokenizer),
+    batch_size=8, shuffle=True,
+    collate_fn=collate_fn
+)
+```
+
+The data pipeline is the hardest part of instruction fine-tuning. The training loop
+itself is identical to pretraining — same `calc_loss_batch`, same `AdamW`, same five
+steps per iteration. The difference is entirely in what the loss is computed over.
+
+Next: [Teaching it to obey — the instruction fine-tuning loop](/series/16-teaching-it-to-obey).

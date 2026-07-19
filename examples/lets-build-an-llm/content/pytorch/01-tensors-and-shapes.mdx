@@ -1,0 +1,89 @@
+---
+title: Tensors and shapes
+description: The absolute minimum PyTorch required to read the main series — how to create tensors, read their shapes, index them, and multiply them.
+---
+
+PyTorch is a library for manipulating multidimensional arrays of numbers, called
+**tensors**, on GPUs. It does a thousand things, but to build an LLM you only need
+about ten of them.
+
+This appendix covers the basics.
+
+## Creating tensors
+
+A tensor is just an array. You can create one from a Python list:
+
+```python cell
+import torch
+
+# 1-dimensional tensor (a vector)
+v = torch.tensor([1, 2, 3])
+print(v.shape)  # torch.Size([3])
+
+# 2-dimensional tensor (a matrix)
+m = torch.tensor([
+    [1, 2, 3],
+    [4, 5, 6]
+])
+print(m.shape)  # torch.Size([2, 3])
+```
+
+The `shape` attribute is the most important property of any tensor. It tells you exactly
+how many dimensions the tensor has, and the size of each dimension.
+
+## Indexing
+
+You pull data out of tensors using brackets, just like Python lists, but you can pass
+comma-separated indices for multiple dimensions:
+
+```python cell
+print(m[0, 1])     # Row 0, Col 1 -> 2
+print(m[:, 1])     # All rows, Col 1 -> tensor([2, 5])
+print(m[1, :])     # Row 1, All cols -> tensor([4, 5, 6])
+```
+
+## Matrix multiplication
+
+Neural networks are mostly matrix multiplication. In PyTorch, you use the `@` operator:
+
+```python cell
+A = torch.tensor([[1, 2],
+                  [3, 4]])  # (2, 2)
+
+B = torch.tensor([[5],
+                  [6]])     # (2, 1)
+
+C = A @ B                   # (2, 1)
+print(C)
+# tensor([[17],
+#         [39]])
+```
+
+For `A @ B` to work, the inner dimensions must match: `(..., M, K) @ (..., K, N)`
+produces `(..., M, N)`.
+
+## View and Transpose
+
+Often you need to change a tensor's shape without changing its data.
+`.view()` regroups the numbers into a new shape.
+`.transpose()` swaps two dimensions.
+
+```python cell
+x = torch.arange(6)
+print(x)                 # tensor([0, 1, 2, 3, 4, 5])
+
+# view regroups the memory
+matrix = x.view(2, 3)
+print(matrix)
+# tensor([[0, 1, 2],
+#         [3, 4, 5]])
+
+# transpose swaps axes
+transposed = matrix.transpose(0, 1)
+print(transposed)
+# tensor([[0, 3],
+#         [1, 4],
+#         [2, 5]])
+```
+
+We use both heavily in Episode 06 to build Multi-Head Attention efficiently.

@@ -1,0 +1,92 @@
+---
+title: Module patterns
+description: How PyTorch organizes parameters into layers, and layers into networks.
+---
+
+`torch.nn.Module` is the base class for all neural network components in PyTorch.
+It provides the structure to organize parameters (weights and biases) so the optimizer
+can find them and update them.
+
+## nn.Linear
+
+The most common layer is `nn.Linear`, which applies a linear transformation:
+$y = xW^T + b$.
+
+```python cell
+import torch
+import torch.nn as nn
+
+# A layer that takes 3 inputs and produces 2 outputs
+layer = nn.Linear(in_features=3, out_features=2)
+
+x = torch.tensor([[1.0, 2.0, 3.0]])
+print(layer(x).shape)  # torch.Size([1, 2])
+```
+
+Under the hood, `nn.Linear` just holds two `nn.Parameter` tensors: `weight` and `bias`.
+When you call `layer(x)`, its `forward` method multiplies them for you.
+
+## Building custom modules
+
+You build your own components by subclassing `nn.Module` and defining a `forward` method:
+
+```python cell
+class FeedForward(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(768, 3072)
+        self.fc2 = nn.Linear(3072, 768)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = torch.relu(x)
+        x = self.fc2(x)
+        return x
+
+model = FeedForward()
+```
+
+By assigning `nn.Linear` layers to `self.fc1` and `self.fc2`, PyTorch automatically
+registers their parameters as belonging to `model`.
+
+## Finding parameters
+
+This automatic registration is why the optimizer knows what to update:
+
+```python cell
+# List all trainable parameters in the model
+total_params = 0
+for name, param in model.named_parameters():
+    print(f"{name}: {param.shape}")
+    total_params += param.numel()
+
+print(f"Total params: {total_params}")
+```
+
+## nn.Sequential and nn.ModuleList
+
+When you have a list of layers, you can't just put them in a standard Python list, or
+PyTorch won't see their parameters.
+
+```python cell
+class BadModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # PyTorch CANNOT see these parameters!
+        self.layers = [nn.Linear(10, 10) for _ in range(5)]
+```
+
+You must use `nn.Sequential` (if they run one after another) or `nn.ModuleList`
+(if you want to iterate over them yourself).
+
+```python cell
+class GoodModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # PyTorch CAN see these parameters
+        self.layers = nn.Sequential(
+            *[nn.Linear(10, 10) for _ in range(5)]
+        )
+```
+
+We use `nn.Sequential` in Episode 08 to stack our 12 Transformer blocks.

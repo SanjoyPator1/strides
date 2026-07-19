@@ -1,0 +1,147 @@
+---
+title: Taming the randomness
+description: Temperature controls how peaked or flat the probability distribution is; top-k restricts sampling to a fixed set of likely candidates. Together they make generation creative but not incoherent.
+---
+
+`generate_text_simple` always picks the single highest-probability token (argmax).
+That's **greedy decoding** — fast, deterministic, but repetitive. Real language models
+sample stochastically and use two controls to shape the distribution before sampling.
+
+## Temperature scaling
+
+Temperature `T` divides the logits before softmax:
+
+```
+scaled_logits = logits / T
+probas = softmax(scaled_logits)
+```
+
+- **T < 1** (e.g. 0.5) — makes the distribution *sharper*. High-probability tokens get
+  amplified, low-probability tokens get crushed. Generation becomes more predictable,
+  repetitive, "safe."
+- **T = 1** — no change.
+- **T > 1** (e.g. 1.5) — makes the distribution *flatter*. Probabilities spread out more
+  evenly across tokens. Generation becomes more creative, surprising, but also more likely
+  to be incoherent.
+
+```python cell
+import torch
+
+# Same logits, three temperatures
+logits = torch.tensor([2.0, 1.0, 0.5, -0.5])
+
+def scaled_probs(logits, temp):
+    return torch.softmax(logits / temp, dim=-1)
+
+print("T=0.5 (sharp):", scaled_probs(logits, 0.5))
+print("T=1.0 (base): ", scaled_probs(logits, 1.0))
+print("T=2.0 (flat): ", scaled_probs(logits, 2.0))
+```
+
+export const sharp  = [[0.867], [0.112], [0.019], [0.002]]
+export const base   = [[0.576], [0.212], [0.131], [0.081]]
+export const flat   = [[0.399], [0.240], [0.195], [0.166]]
+export const tokLbls = ["tok A","tok B","tok C","tok D"]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="T=0.5 — sharp: token A gets 87% probability. Almost always picked.">
+    <Matrix id="temp" values={sharp} rowLabels={tokLbls} colLabels={["prob"]} colorScale="sequential" precision={3} cellSize={60} />
+  </Step>
+  <Step caption="T=1.0 — base: natural softmax. Token A favored but others have real chances.">
+    <Matrix id="temp" values={base} rowLabels={tokLbls} colLabels={["prob"]} colorScale="sequential" precision={3} cellSize={60} />
+  </Step>
+  <Step caption="T=2.0 — flat: probabilities nearly equal. Generation unpredictable and creative.">
+    <Matrix id="temp" values={flat} rowLabels={tokLbls} colLabels={["prob"]} colorScale="sequential" precision={3} cellSize={60} />
+  </Step>
+</Scene>
+
+## Top-k filtering
+
+Even at T=1, the vocabulary has 50,257 tokens. A tail of low-probability junk tokens
+can occasionally get sampled. **Top-k filtering** zeroes out everything except the
+k most likely tokens before applying softmax:
+
+```python cell
+def top_k_filter(logits, k):
+    # Find the k-th largest logit value
+    top_vals, _ = torch.topk(logits, k)
+    threshold = top_vals[-1]                  # kth largest
+    # Zero out anything below threshold
+    filtered = torch.where(logits >= threshold, logits, torch.tensor(float('-inf')))
+    return filtered
+
+logits = torch.tensor([2.0, 1.8, 1.0, 0.5, -0.2, -1.0])
+filtered = top_k_filter(logits, k=3)
+probas = torch.softmax(filtered, dim=-1)
+print("Top-3 probas:", probas)
+# Only tokens 0, 1, 2 have nonzero probability
+```
+
+export const fullProbs = [[0.38], [0.34], [0.16], [0.09], [0.02], [0.01]]
+export const topkProbs = [[0.42], [0.38], [0.20], [0.00], [0.00], [0.00]]
+export const tokLabels = ["t0","t1","t2","t3","t4","t5"]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="Full softmax — all 6 tokens have nonzero probability. Tail tokens can get sampled.">
+    <Matrix id="topk" values={fullProbs} rowLabels={tokLabels} colLabels={["p(k=6)"]} colorScale="sequential" precision={2} cellSize={60} />
+  </Step>
+  <Step caption="Top-3 filter + renormalize — only 3 candidates remain. Zero probability for tail tokens.">
+    <Matrix id="topk" values={topkProbs} rowLabels={tokLabels} colLabels={["p(k=3)"]} colorScale="sequential" precision={2} cellSize={60} />
+  </Step>
+</Scene>
+
+## The full `generate` function
+
+```python cell
+def generate(model, idx, max_new_tokens, context_size,
+             temperature=1.0, top_k=None, eos_id=None):
+    for _ in range(max_new_tokens):
+        idx_cond = idx[:, -context_size:]
+
+        with torch.no_grad():
+            logits = model(idx_cond)
+
+        logits = logits[:, -1, :]          # last position: (b, vocab_size)
+
+        # Apply top-k filter
+        if top_k is not None:
+            top_vals, _ = torch.topk(logits, top_k)
+            threshold = top_vals[:, -1, None]
+            logits = torch.where(logits >= threshold, logits,
+                                 torch.full_like(logits, float('-inf')))
+
+        # Apply temperature and sample
+        if temperature > 0.0:
+            logits /= temperature
+            probs = torch.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)  # sample!
+        else:
+            idx_next = torch.argmax(logits, dim=-1, keepdim=True)  # greedy
+
+        if eos_id is not None and (idx_next == eos_id).all():
+            break
+
+        idx = torch.cat((idx, idx_next), dim=1)
+
+    return idx
+```
+
+The `eos_id` early-stop: GPT-2 uses token 50256 (`<|endoftext|>`) as a document
+boundary. Setting `eos_id=50256` lets the model signal "I'm done" rather than
+generating up to `max_new_tokens` unconditionally.
+
+```python cell
+# Usage
+token_ids = generate(
+    model, text_to_token_ids("Every effort moves you", tokenizer),
+    max_new_tokens=15, context_size=256,
+    temperature=0.7, top_k=50
+)
+print(token_ids_to_text(token_ids, tokenizer))
+```
+
+Typical guidance: `temperature=0.7–1.0`, `top_k=40–50` gives outputs that are both
+varied and coherent for a well-trained model. For a factual Q&A model, lower temperature
+(0.3–0.5) and smaller top_k (10–20) gives more precise, deterministic answers.
+
+Next: [Our skeleton, their brain — loading GPT-2 weights](/series/13-loading-gpt2-weights).

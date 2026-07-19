@@ -1,0 +1,136 @@
+---
+title: Feeding the model
+description: A sliding-window dataset converts raw text into aligned input–target pairs; a DataLoader shuffles and batches them for the training loop.
+---
+
+The model can compute loss given inputs and targets. Now we need an efficient supply of
+input–target pairs from real text. This episode builds the data pipeline.
+
+## The sliding-window idea
+
+Every consecutive window of `context_length + 1` tokens from a text file gives one
+training sample. The first `context_length` tokens are the input; the last
+`context_length` tokens (shifted left by one) are the targets.
+
+With `max_length = 4` and `stride = 1`:
+
+```
+text:       [E, v, e, r, y,  ,j, o, u, r, n, e, y, ...]
+token IDs:  [  6109, 3226, 6100, 345, 7002, ...]
+
+Window 0:   [6109, 3226, 6100, 345]  → input:  [6109, 3226, 6100]   target: [3226, 6100, 345]
+Window 1:   [3226, 6100, 345, 7002]  → input:  [3226, 6100, 345]    target: [6100, 345, 7002]
+...
+```
+
+export const windowGrid = [
+  [6109, 3226, 6100, 345],
+  [3226, 6100, 345, 7002],
+  [6100, 345, 7002, 4940],
+  [345, 7002, 4940, 351],
+]
+export const inputCols = [[6109, 3226, 6100], [3226, 6100, 345], [6100, 345, 7002], [345, 7002, 4940]]
+export const targetCols = [[3226, 6100, 345], [6100, 345, 7002], [345, 7002, 4940], [7002, 4940, 351]]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="Four sliding windows of length 4, stride 1. Each window is one training sample.">
+    <Matrix id="window" values={windowGrid} rowLabels={["win 0","win 1","win 2","win 3"]} colLabels={["t","t+1","t+2","t+3"]} colorScale="sequential" precision={0} cellSize={60} />
+  </Step>
+  <Step caption="Inputs — first 3 tokens per window. Model reads these.">
+    <Matrix id="window" values={inputCols} rowLabels={["win 0","win 1","win 2","win 3"]} colLabels={["in 0","in 1","in 2"]} colorScale="sequential" precision={0} cellSize={60} />
+  </Step>
+  <Step caption="Targets — last 3 tokens per window. Model predicts these.">
+    <Matrix id="window" values={targetCols} rowLabels={["win 0","win 1","win 2","win 3"]} colLabels={["tgt 0","tgt 1","tgt 2"]} colorScale="diverging" precision={0} cellSize={60} />
+  </Step>
+</Scene>
+
+## GPTDataset
+
+```python cell
+from torch.utils.data import Dataset, DataLoader
+
+class GPTDataset(Dataset):
+    def __init__(self, txt, tokenizer, max_length, stride):
+        self.input_ids  = []
+        self.target_ids = []
+
+        token_ids = tokenizer.encode(txt)
+
+        for i in range(0, len(token_ids) - max_length, stride):
+            chunk   = token_ids[i : i + max_length + 1]
+            self.input_ids.append(torch.tensor(chunk[:-1]))   # first max_length tokens
+            self.target_ids.append(torch.tensor(chunk[1:]))   # last  max_length tokens (shift)
+
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, idx):
+        return self.input_ids[idx], self.target_ids[idx]
+```
+
+`stride` controls overlap:
+- `stride = 1` → maximum overlap, almost every token appears in multiple windows (more training signal, risk of memorization)
+- `stride = max_length` → no overlap, each token appears in exactly one window (faster, less overfitting)
+
+## Train / validation split and DataLoader
+
+```python cell
+import tiktoken
+
+with open("the-verdict.txt", "r", encoding="utf-8") as f:
+    raw_text = f.read()
+
+tokenizer = tiktoken.get_encoding("gpt2")
+
+train_ratio = 0.90
+split_idx   = int(train_ratio * len(raw_text))
+
+train_loader = DataLoader(
+    GPTDataset(raw_text[:split_idx], tokenizer, max_length=256, stride=256),
+    batch_size=2, shuffle=True, drop_last=True, num_workers=0
+)
+val_loader = DataLoader(
+    GPTDataset(raw_text[split_idx:], tokenizer, max_length=256, stride=256),
+    batch_size=2, shuffle=False, drop_last=False, num_workers=0
+)
+
+x, y = next(iter(train_loader))
+print("Input batch shape: ", x.shape)    # (2, 256)
+print("Target batch shape:", y.shape)    # (2, 256)
+```
+
+`drop_last=True` on the training loader discards the last incomplete batch — prevents
+an unexpectedly small batch from producing unstable gradient updates. `shuffle=True`
+randomizes window order each epoch so the model doesn't see windows in the same order
+twice, which helps it generalize.
+
+## Loss helpers
+
+```python cell
+def calc_loss_batch(input_batch, target_batch, model, device):
+    input_batch  = input_batch.to(device)
+    target_batch = target_batch.to(device)
+    logits = model(input_batch)                           # (b, T, vocab)
+    return F.cross_entropy(logits.flatten(0, 1),          # (b*T, vocab)
+                           target_batch.flatten())         # (b*T,)
+
+def calc_loss_loader(data_loader, model, device, num_batches=None):
+    total_loss = 0.
+    nb = len(data_loader) if num_batches is None else min(num_batches, len(data_loader))
+    for i, (x, y) in enumerate(data_loader):
+        if i >= nb:
+            break
+        total_loss += calc_loss_batch(x, y, model, device).item()
+    return total_loss / nb
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+print("Train loss (initial):", calc_loss_loader(train_loader, model, device, num_batches=5))
+# ≈ 10.98  — near log(50257), as expected for a random model
+```
+
+The initial loss (~10.98) is the random baseline. Training is the process of pushing
+this number down — ideally toward 3–4 on a real dataset.
+
+Next: [The training loop](/series/11-the-training-loop).

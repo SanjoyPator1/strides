@@ -1,0 +1,186 @@
+---
+title: Many heads, one matmul
+description: Multi-head attention runs several attention computations in parallel — each head specializes on a different kind of token relationship — then concatenates their outputs into one wide vector.
+---
+
+A single attention head learns *one* notion of relevance. For the word "it" in "The
+animal didn't cross the street because it was too tired", one head might learn to track
+syntactic agreement (subject-verb), while another tracks coreference ("it" = "animal"),
+and a third tracks long-range semantic flow. Forcing a single head to capture all of
+these simultaneously is a bottleneck.
+
+**Multi-head attention** runs several independent attention computations in parallel,
+each with its own W_query, W_key, W_value, and concatenates their outputs. Each head
+specializes freely — this specialization isn't engineered in, it *emerges* from gradient
+descent starting from different random initializations.
+
+## Wrapper approach — naive but clear
+
+The simplest implementation: create `num_heads` independent `CausalAttention` modules
+and concatenate their outputs along the feature dimension.
+
+```python cell
+class MultiHeadAttentionWrapper(nn.Module):
+    def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
+        super().__init__()
+        # nn.ModuleList — not a plain Python list, so PyTorch can:
+        # • track each head's parameters for the optimizer
+        # • move all heads to GPU with .to(device)
+        # • include them in state_dict() for checkpointing
+        self.heads = nn.ModuleList([
+            CausalAttention(d_in, d_out, context_length, dropout, qkv_bias)
+            for _ in range(num_heads)
+        ])
+
+    def forward(self, x):
+        # Each head: (batch, T, d_out) — concatenate along last dim
+        return torch.cat([head(x) for head in self.heads], dim=-1)
+
+torch.manual_seed(123)
+mhaw = MultiHeadAttentionWrapper(
+    d_in=3, d_out=2, context_length=6, dropout=0.0, num_heads=2
+)
+ctx = mhaw(batch)
+print(ctx.shape)         # torch.Size([2, 6, 4]) — 4 = d_out*num_heads
+print(ctx[0, 0])         # [-0.4519, 0.2216, 0.4772, 0.1063]
+                         # ← head 1 ─────────┘  └─── head 2 ───┘
+```
+
+export const h1Out = [[-0.45, 0.22], [-0.59, 0.01], [-0.63, -0.06], [-0.57, -0.08], [-0.55, -0.10], [-0.53, -0.11]]
+export const h2Out = [[0.48, 0.11], [0.59, 0.33], [0.62, 0.39], [0.55, 0.36], [0.53, 0.34], [0.51, 0.35]]
+export const concatOut = [[-0.45, 0.22, 0.48, 0.11], [-0.59, 0.01, 0.59, 0.33], [-0.63, -0.06, 0.62, 0.39], [-0.57, -0.08, 0.55, 0.36], [-0.55, -0.10, 0.53, 0.34], [-0.53, -0.11, 0.51, 0.35]]
+
+export const toks = ["You", "jou", "sta", "wit", "one", "ste"]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="Head 1 output — (6, 2). Each token attends to past tokens through W_q1, W_k1, W_v1.">
+    <Matrix id="mha-out" values={h1Out} rowLabels={toks} colLabels={["h1·d0","h1·d1"]} colorScale="diverging" precision={2} />
+  </Step>
+  <Step caption="Head 2 output — (6, 2). Independent W_q2, W_k2, W_v2 → learns a different notion of relevance.">
+    <Matrix id="mha-out" values={h2Out} rowLabels={toks} colLabels={["h2·d0","h2·d1"]} colorScale="diverging" precision={2} />
+  </Step>
+  <Step caption="Concatenated along dim=-1 → (6, 4). Each token's vector now holds both heads' views side by side.">
+    <Matrix id="mha-out" values={concatOut} rowLabels={toks} colLabels={["h1·d0","h1·d1","h2·d0","h2·d1"]} colorScale="diverging" precision={2} />
+  </Step>
+</Scene>
+
+The `dim=-1` concatenation makes each token's representation *wider* (more features),
+not deeper (more tokens). Each token now carries parallel evidence from two different
+attention patterns.
+
+## The problem with the Wrapper
+
+Each of the `num_heads` `CausalAttention` modules runs its own full Q/K/V projections
+and its own attention matmuls, **sequentially in a Python loop**. On a GPU, many small
+sequential operations are far slower than one large batched operation — even when the
+total arithmetic is identical. The Wrapper also allocates separate weight matrices for
+each head, which is redundant.
+
+## Efficient MultiHeadAttention — project once, split, then attend
+
+The key insight: instead of projecting into small (d_out/num_heads)-wide spaces
+*separately* per head, project once into the full d_out width, then *reshape* that to
+assign slices to heads. All attention math then runs in one big batched tensor operation.
+
+```python cell
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
+        super().__init__()
+        assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
+        self.d_out     = d_out
+        self.num_heads = num_heads
+        self.head_dim  = d_out // num_heads   # e.g. 768 // 12 = 64
+
+        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key   = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.out_proj = nn.Linear(d_out, d_out)   # mix heads after concatenation
+
+        self.dropout = nn.Dropout(dropout)
+        self.register_buffer(
+            'mask',
+            torch.triu(torch.ones(context_length, context_length), diagonal=1)
+        )
+
+    def forward(self, x):
+        b, num_tokens, d_in = x.shape
+
+        # ① Project once at full d_out width — no head split yet
+        queries = self.W_query(x)   # (b, T, d_out)
+        keys    = self.W_key(x)
+        values  = self.W_value(x)
+
+        # ② Reshape: split d_out → (num_heads, head_dim)
+        #    .view does NOT copy data — just changes how memory is read
+        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
+        keys    = keys.view(b, num_tokens, self.num_heads, self.head_dim)
+        values  = values.view(b, num_tokens, self.num_heads, self.head_dim)
+
+        # ③ Transpose to (b, num_heads, T, head_dim) so matmul runs per-head
+        queries = queries.transpose(1, 2)
+        keys    = keys.transpose(1, 2)
+        values  = values.transpose(1, 2)
+
+        # ④ Scaled dot-product — one giant batched matmul, all heads in parallel
+        attn_scores = queries @ keys.transpose(2, 3)   # (b, h, T, T)
+        mask_slice  = self.mask.bool()[:num_tokens, :num_tokens]
+        attn_scores.masked_fill_(mask_slice, -torch.inf)
+        attn_weights = torch.softmax(attn_scores / self.head_dim**0.5, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
+        # ⑤ Aggregate values, undo the transpose, flatten heads back
+        ctx = (attn_weights @ values)           # (b, h, T, head_dim)
+        ctx = ctx.transpose(1, 2).contiguous()  # (b, T, h, head_dim)
+        ctx = ctx.view(b, num_tokens, self.d_out)  # (b, T, d_out)  — concat heads
+
+        return self.out_proj(ctx)   # (b, T, d_out) — learned linear mix
+
+torch.manual_seed(123)
+mha = MultiHeadAttention(
+    d_in=3, d_out=4, context_length=6, dropout=0.0, num_heads=2
+)
+ctx = mha(batch)
+print(ctx.shape)   # torch.Size([2, 6, 4])
+```
+
+The shape transformation story — with `b=2, T=6, d_out=4, num_heads=2, head_dim=2`:
+
+<BracketDiagram
+  name="queries (after view + transpose)"
+  levels={[
+    { name: 'batch (2)', indexLabels: ['b0', 'b1'] },
+    { name: 'heads (2)', indexLabels: ['h0', 'h1'] },
+    { name: 'tokens (6)', indexLabels: ['You','jou','sta','wit','one','ste'] },
+    { name: 'head_dim (2)' },
+  ]}
+  values={[
+    [
+      [['a','b'],['c','d'],['e','f'],['g','h'],['i','j'],['k','l']],
+      [['A','B'],['C','D'],['E','F'],['G','H'],['I','J'],['K','L']],
+    ],
+    [
+      [['a','b'],['c','d'],['e','f'],['g','h'],['i','j'],['k','l']],
+      [['A','B'],['C','D'],['E','F'],['G','H'],['I','J'],['K','L']],
+    ],
+  ]}
+  annotations={[
+    { target: [null, 0, null, null], label: 'Head 0 — lowercase letters', side: 'left', color: '#3b82f6' },
+    { target: [null, 1, null, null], label: 'Head 1 — uppercase letters', side: 'left', color: '#f59e0b' },
+    { target: [null, null, null, 0], label: 'head_dim=2', side: 'right' },
+  ]}
+  indexExamples={[[0,0,0,0],[0,1,0,0]]}
+/>
+
+`.view()` doesn't move bytes — it just reinterprets the same memory layout. The `a, b`
+that were side-by-side in a flat `(T, d_out)` row are now read as `[[a], [b]]` — `a`
+belongs to head 0, `b` to head 1. All 12 heads in GPT-2 (each 64-dim) happen in one
+batched matmul through this reshape trick.
+
+The `out_proj` linear at the end lets different heads talk to each other: it mixes all
+`d_out` features (all heads concatenated) into a new `d_out` space where information
+from different attention patterns can combine.
+
+**GPT-2 small in numbers:** `d_out = 768`, `num_heads = 12`, `head_dim = 64`. All 12
+heads' attention computations run as one `(b, 12, T, T)` batched matmul.
+
+Next: [The supporting cast — LayerNorm, GELU, and residuals](/series/07-layernorm-gelu-residuals).

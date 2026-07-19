@@ -1,0 +1,375 @@
+---
+title: Numbers become vectors
+description: Token IDs are just row indices with no semantic meaning — so we build a learned lookup table that turns each ID into a rich vector, then inject position so the model knows word order.
+---
+
+The last episode ended with this: `7002` is the token ID for `" journey"` in GPT-2's
+vocabulary. An ID like that **means nothing by itself** — it's a row label, like a seat
+number that tells you *where* to sit in a stadium, not *who* you are or *what* you like.
+Neighboring IDs (`7001`, `7003`) can be completely unrelated concepts. There's no geometry
+here, no sense in which `7002` is "close to" or "related to" any other number.
+
+A transformer can't use raw integers. It needs a rich, high-dimensional vector for each
+token — one where similar tokens land near each other in space, and where the *position*
+of a word in a sentence is also encoded. This episode builds that representation from
+scratch, one step at a time.
+
+## Step 1 — embeddings as a lookup table
+
+The simplest possible model for "token ID → vector": a big table. One row per
+vocabulary entry, one column per embedding dimension. Look up token ID `3`: get back
+row 3 of the table. That's it.
+
+In PyTorch, this table is called `nn.Embedding`. Let's build a tiny one by hand to see
+exactly what's happening:
+
+```python cell
+import torch
+
+vocab_size = 6
+output_dim = 3
+
+torch.manual_seed(123)
+embedding_layer = torch.nn.Embedding(vocab_size, output_dim)
+print(embedding_layer.weight)
+```
+
+Six rows, three columns. Each row is a learnable vector — initialized randomly here,
+refined by gradient descent during training. Now look up a single token:
+
+```python cell
+print(embedding_layer(torch.tensor([3])))
+```
+
+Count down the printed weight matrix: row 0, row 1, row 2, **row 3** — that's the
+vector you just got back. No arithmetic happened. The layer literally went to shelf #3
+and returned what was sitting there.
+
+The visualization below traces this lookup. Notice how row 3 is highlighted when we
+ask for token ID 3:
+
+export const weightMatrix = [
+  [0.34, -0.18, -0.17],
+  [0.92,  1.58,  1.30],
+  [1.28, -0.20, -0.16],
+  [-0.40,  0.97, -1.15],
+  [-1.16,  0.33, -0.63],
+  [-2.84, -0.78, -1.41],
+]
+
+export const selectedRow = [
+  [0.0, 0.0, 0.0],
+  [0.0, 0.0, 0.0],
+  [0.0, 0.0, 0.0],
+  [-0.40, 0.97, -1.15],
+  [0.0, 0.0, 0.0],
+  [0.0, 0.0, 0.0],
+]
+
+<Scene>
+  <Step caption="The full embedding table: 6 tokens × 3 dimensions. Each row is one token's learned vector.">
+    <Matrix
+      id="embed-table"
+      values={weightMatrix}
+      rowLabels={['id 0', 'id 1', 'id 2', 'id 3', 'id 4', 'id 5']}
+      colLabels={['dim 0', 'dim 1', 'dim 2']}
+      colorScale="diverging"
+      precision={2}
+    />
+  </Step>
+  <Step caption="embedding_layer(tensor([3])) — row 3 is copied out. No math, just an index lookup.">
+    <Matrix
+      id="embed-table"
+      values={selectedRow}
+      rowLabels={['id 0', 'id 1', 'id 2', 'id 3', 'id 4', 'id 5']}
+      colLabels={['dim 0', 'dim 1', 'dim 2']}
+      colorScale="diverging"
+      precision={2}
+      highlight={{ row: 3 }}
+    />
+  </Step>
+</Scene>
+
+Now embed a whole sequence at once:
+
+```python cell
+input_ids = torch.tensor([2, 3, 5, 1])
+print(embedding_layer(input_ids))
+```
+
+The output is rows 2, 3, 5, and 1 of the weight matrix, stacked in that order — a
+`(4, 3)` tensor. The same token ID always produces the same vector (until the weights
+are updated by training). There's no state, no memory of previous calls — just a row
+copy, four times over.
+
+## Why 768 dimensions?
+
+The toy example above uses 3 dimensions so you can read every number by eye. Real GPT-2
+small uses **768 dimensions** — a much longer row per token.
+
+Why that many? More dimensions give the model more geometric "room" to place different
+tokens far apart from each other. Synonyms can be close, antonyms can be far, "king" can
+be close to "queen" in ways that "bicycle" is not. 768 was the empirical sweet spot
+Radford et al. chose for the 124M-parameter version of GPT-2.
+
+The embedding table for GPT-2 has `50257 × 768 = ~38.6M` parameters — nearly a third
+of the whole model, before a single transformer layer is counted. These parameters are
+learned jointly with everything else during pretraining.
+
+## The position problem
+
+Here's a problem with what we've built so far: `nn.Embedding` returns the **same** vector
+for a token ID every single time, regardless of where in the sentence it appears.
+
+The word `"bank"` at position 0 and `"bank"` at position 10 get identical embeddings.
+But context matters enormously. And worse: transformer attention is itself
+**order-blind**. Without an explicit position signal, `"dog bites man"` and `"man bites
+dog"` look identical to the model — the same tokens, just shuffled:
+
+```python cell
+torch.manual_seed(42)
+tok_emb_layer = torch.nn.Embedding(50257, 256)
+
+# "dog bites man" vs "man bites dog" — same tokens, different order
+ids_a = torch.tensor([3190, 19299, 582])   # dog, bites, man (approximate GPT-2 ids)
+ids_b = torch.tensor([582, 19299, 3190])   # man, bites, dog
+
+emb_a = tok_emb_layer(ids_a)
+emb_b = tok_emb_layer(ids_b)
+
+# The set of embedding vectors is identical — only their order differs,
+# which pure attention can't tell apart without position info
+print("Sum of embeddings A:", emb_a.sum(dim=0)[:4].tolist())
+print("Sum of embeddings B:", emb_b.sum(dim=0)[:4].tolist())
+print("Same?", torch.allclose(emb_a.sum(0), emb_b.sum(0)))
+```
+
+## A second lookup table, for positions
+
+The fix is elegant: build a **second** embedding table, indexed by *position* rather
+than token identity. Position 0 gets a learned vector. Position 1 gets a different one.
+And so on, up to the maximum context length.
+
+These positional embeddings are added element-wise to the token embeddings, giving
+each token both *what it is* and *where it sits*:
+
+```python cell
+vocab_size = 50257
+output_dim = 256
+
+token_embedding_layer = torch.nn.Embedding(vocab_size, output_dim)
+
+context_length = 4
+pos_embedding_layer = torch.nn.Embedding(context_length, output_dim)
+
+# Look up positions [0, 1, 2, 3]
+pos_embeddings = pos_embedding_layer(torch.arange(context_length))
+print("Positional embedding shape:", pos_embeddings.shape)
+```
+
+```python cell
+import tiktoken
+
+bpe = tiktoken.get_encoding("gpt2")
+sample_ids = torch.tensor(bpe.encode("Your journey starts here")[:4])
+
+tok_emb = token_embedding_layer(sample_ids)
+pos_emb = pos_embedding_layer(torch.arange(len(sample_ids)))
+
+input_embeddings = tok_emb + pos_emb
+print("Token emb shape:    ", tok_emb.shape)
+print("Position emb shape: ", pos_emb.shape)
+print("Input emb shape:    ", input_embeddings.shape)
+```
+
+Here is what that addition looks like, with tiny numbers so you can trace every value:
+
+export const tokenEmb = [
+  [1.0, 2.0],
+  [3.0, 4.0],
+  [0.5, 1.5],
+  [2.2, 0.8],
+]
+
+export const posEmb = [
+  [0.1, 0.1],
+  [0.2, 0.2],
+  [0.3, 0.3],
+  [0.4, 0.4],
+]
+
+export const inputEmb = [
+  [1.1, 2.1],
+  [3.2, 4.2],
+  [0.8, 1.8],
+  [2.6, 1.2],
+]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="Token embeddings — 'what each token is'. Same ID always gives the same row.">
+    <Matrix
+      id="input-emb"
+      values={tokenEmb}
+      rowLabels={['pos 0', 'pos 1', 'pos 2', 'pos 3']}
+      colLabels={['d₀', 'd₁']}
+      colorScale="sequential"
+      precision={1}
+    />
+  </Step>
+  <Step caption="Positional embeddings — 'which slot each token occupies'. Completely independent of token identity.">
+    <Matrix
+      id="input-emb"
+      values={posEmb}
+      rowLabels={['pos 0', 'pos 1', 'pos 2', 'pos 3']}
+      colLabels={['d₀', 'd₁']}
+      colorScale="sequential"
+      precision={1}
+    />
+  </Step>
+  <Step caption="Input embeddings = token + position, added element-wise. Every token now carries both what it is and where it sits.">
+    <Matrix
+      id="input-emb"
+      values={inputEmb}
+      rowLabels={['pos 0', 'pos 1', 'pos 2', 'pos 3']}
+      colLabels={['d₀', 'd₁']}
+      colorScale="sequential"
+      precision={1}
+    />
+  </Step>
+</Scene>
+
+## Broadcasting over a batch
+
+In practice, the model processes multiple sequences at once (a *batch*). The positional
+embedding table only has `context_length` rows — one vector per position — but PyTorch's
+**broadcasting** adds it to every sequence in the batch automatically:
+
+```python cell
+batch_size = 8
+max_length = 4
+
+batch_input_ids = torch.randint(0, 50257, (batch_size, max_length))
+
+tok_embeddings = token_embedding_layer(batch_input_ids)
+pos_embeddings = pos_embedding_layer(torch.arange(max_length))
+
+print("tok_embeddings shape:", tok_embeddings.shape)   # (8, 4, 256)
+print("pos_embeddings shape:", pos_embeddings.shape)   # (4, 256)
+
+input_embeddings = tok_embeddings + pos_embeddings     # broadcasting!
+print("input_embeddings shape:", input_embeddings.shape)  # (8, 4, 256)
+```
+
+The `(4, 256)` positional tensor broadcasts over the `(8, 4, 256)` token tensor.
+PyTorch silently treats the missing leading dimension as size 1 and stretches it to 8,
+adding the same position-0 vector to every sequence's first token, the same position-1
+vector to every second token, and so on.
+
+The canonical `(batch, seq, d_model)` shape that every GPT layer expects:
+
+<BracketDiagram
+  name="input_embeddings"
+  levels={[
+    { name: 'batch', indexLabels: ['seq 0', 'seq 1', 'seq 2', 'seq 3', 'seq 4', 'seq 5', 'seq 6', 'seq 7'] },
+    {
+      name: 'tokens',
+      indexLabels: ['pos 0', 'pos 1', 'pos 2', 'pos 3'],
+    },
+    { name: 'd_model (256)' },
+  ]}
+  values={[
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+    [['a'], ['b'], ['c'], ['d']],
+  ]}
+  annotations={[
+    {
+      target: [null, 0, null],
+      label: 'same pos_emb row added to position 0 in every sequence',
+      side: 'above',
+      color: '#3b82f6',
+    },
+    {
+      target: [0, null, null],
+      label: 'one full sequence: 4 tokens × 256 dims',
+      side: 'left',
+    },
+  ]}
+  indexExamples={[
+    [0, 0, 0],
+    [0, 1, 0],
+    [1, 0, 0],
+  ]}
+/>
+
+## The context-length ceiling
+
+There's one important constraint buried in this design: the positional embedding table
+has exactly `context_length` rows. Try to pass a sequence longer than that and PyTorch
+raises an index error — there's simply no row to look up for position 1025.
+
+This is why GPT-2's context window (1,024 tokens) is a hard architectural ceiling, not
+a soft suggestion. The position table was built with exactly 1,024 rows. Later
+architectures (RoPE, ALiBi, and other relative-position schemes) escape this ceiling by
+encoding position as a *function* of distance rather than a fixed table — but that's a
+story for a different series.
+
+## The full picture
+
+Here is the whole pipeline, with real GPT-2 small shapes:
+
+```python cell
+import tiktoken, torch
+
+vocab_size     = 50257
+d_model        = 768
+context_length = 1024
+
+token_emb_layer = torch.nn.Embedding(vocab_size, d_model)
+pos_emb_layer   = torch.nn.Embedding(context_length, d_model)
+
+bpe  = tiktoken.get_encoding("gpt2")
+text = "Your journey starts with one step"
+ids  = bpe.encode(text)
+print(f"Text:      '{text}'")
+print(f"Token IDs: {ids}  (len={len(ids)})")
+
+id_tensor = torch.tensor(ids).unsqueeze(0)          # (1, 6)
+tok_emb   = token_emb_layer(id_tensor)              # (1, 6, 768)
+pos_emb   = pos_emb_layer(torch.arange(len(ids)))   # (6, 768)
+
+input_emb = tok_emb + pos_emb                       # (1, 6, 768) — broadcast
+print(f"\nFinal input tensor shape: {input_emb.shape}")
+print("→ (batch=1, seq_len=6, d_model=768)")
+print("\nThis tensor is the actual input to the first transformer block.")
+```
+
+The full token journey, end to end — text in, embedding vectors out:
+
+<TokenJourney
+  sequences={[
+    {
+      label: 'batch 0',
+      text: 'Your journey starts with one step',
+      tokens: [
+        { text: 'Your',     id: 7120, embedding: [0.43, 0.15, 0.89] },
+        { text: ' journey', id: 7002, embedding: [0.55, 0.87, 0.66] },
+        { text: ' starts',  id: 4940, embedding: [0.57, 0.85, 0.64] },
+        { text: ' with',    id: 351,  embedding: [0.22, 0.58, 0.33] },
+        { text: ' one',     id: 530,  embedding: [0.77, 0.25, 0.10] },
+        { text: ' step',    id: 2239, embedding: [0.05, 0.80, 0.55] },
+      ],
+    },
+  ]}
+/>
+
+Every token is now a `(768,)` vector. The weights are random until training — the model
+has no idea these vectors are meaningful yet — but the *shape* is right, the *position*
+is baked in, and the pipeline is ready to feed the first transformer block.
+
+Next: [the problem attention solves](/series/03-the-problem-attention-solves).

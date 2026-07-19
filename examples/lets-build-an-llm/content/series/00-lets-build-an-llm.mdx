@@ -1,0 +1,152 @@
+---
+title: "Let's Build an LLM"
+description: What we're building, why every piece is built by hand, a taste of the visualization style, and the target architecture.
+---
+
+## The promise
+
+Over this series we're going to build a real, working large language model —
+completely on our own. Our own tokenizer. Our own attention mechanism. Our own
+transformer block. Our own training loop. Just **Python and PyTorch**, nothing
+pretrained borrowed early, nothing hidden behind a library call you don't understand.
+
+This is not a "call an API and get a chatbot" tutorial. Every piece gets written,
+explained, and run — line by line — before we use it.
+
+There's exactly one deliberate exception, and it comes late: once we've built an
+architecture that matches GPT-2's, we'll load OpenAI's real, pretrained weights
+straight into the model *we* built by hand. That's not a shortcut — it's the payoff.
+If our architecture is right, someone else's trained numbers should just drop in and
+work.
+
+## Where we're headed
+
+Here's the actual GPT architecture we're building — every layer in its real place,
+text flowing in at the bottom and a prediction coming out the top:
+
+<div style={{ overflowX: 'auto' }}>
+<ArrowOverlay>
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: '360px' }}>
+    <Group label="GPT model" color="#f3f4f6">
+      <Node anchor="raw-text" shape="pill">"The cat sat on the mat"</Node>
+      <Node anchor="tok-text" shape="pill">Tokenized text</Node>
+      <Node anchor="tok-emb" shape="rect">Token embedding layer</Node>
+      <Node anchor="pos-emb" shape="rect">Positional embedding layer</Node>
+      <Node anchor="drop0" shape="pill">Dropout</Node>
+      <Group label="Transformer block" color="#bfdbfe" repeat={12}>
+        <Node anchor="ln1" shape="rect">LayerNorm 1</Node>
+        <Node anchor="attn" shape="rect" color="#374151" textColor="#ffffff">
+          Masked multi-head attention
+        </Node>
+        <Node anchor="drop1" shape="pill">Dropout</Node>
+        <Node anchor="add1" shape="circle">+</Node>
+        <Node anchor="ln2" shape="rect">LayerNorm 2</Node>
+        <Node anchor="ff" shape="rect">Feed forward</Node>
+        <Node anchor="drop2" shape="pill">Dropout</Node>
+        <Node anchor="add2" shape="circle">+</Node>
+      </Group>
+      <Node anchor="final-ln" shape="rect">Final LayerNorm</Node>
+      <Node anchor="linear-out" shape="rect">Linear output layer</Node>
+      <Node anchor="output" shape="pill">Output logits</Node>
+    </Group>
+  </div>
+
+  <Arrow from="raw-text" to="tok-text" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="tok-text" to="tok-emb" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="tok-emb" to="pos-emb" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="pos-emb" to="drop0" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="drop0" to="ln1" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="ln1" to="attn" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="attn" to="drop1" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="drop1" to="add1" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="add1" to="ln2" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="ln2" to="ff" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="ff" to="drop2" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="drop2" to="add2" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="add2" to="final-ln" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="final-ln" to="linear-out" path="straight" fromSide="bottom" toSide="top" />
+  <Arrow from="linear-out" to="output" path="straight" fromSide="bottom" toSide="top" />
+
+  <Arrow from="drop0" to="add1" path="elbow" fromSide="right" toSide="right" label="shortcut" />
+  <Arrow from="add1" to="add2" path="elbow" fromSide="right" toSide="right" label="shortcut" />
+</ArrowOverlay>
+</div>
+
+A few things worth knowing about this diagram before we've built any of it:
+
+- **The blue block repeats 12 times.** Everything inside it — attention (episodes
+  3–6) and its supporting cast of LayerNorm/feed-forward/dropout (episode 7) — gets
+  built once, then stacked 12 times. Episode 8 does the stacking.
+- **The dark box is "masked multi-head attention."** That's the part everyone's
+  heard of, and it's the subject of four whole episodes (3 through 6) because it's
+  genuinely doing the most interesting work in the model.
+- **The two "shortcut" lines are residual connections** — they let information skip
+  past attention and the feed-forward layer untouched, which turns out to matter
+  enormously once we start training a stack this deep. We'll get to why in episode 7.
+- **The output is one probability distribution per input token** — the model's
+  best guess at what comes next. It means nothing until Act II trains it.
+
+By the last main episode of this series, every one of those boxes will be something
+you built yourself and understand completely — what it computes, why it's shaped
+the way it is, and what would break if it weren't there.
+
+## How we're going to teach this
+
+Almost nothing in this series is a wall of text or a slide. Nearly every idea gets a
+real, interactive visualization instead — something you can watch change, and
+usually something you could click or hover yourself on the companion site. Here's a
+small, completely non-serious taste of what that looks like, before we've taught a
+single real concept:
+
+export const blankGrid = [
+  [0.12, 0.34, 0.08, 0.51, 0.22],
+  [0.44, 0.19, 0.63, 0.05, 0.37],
+  [0.28, 0.71, 0.15, 0.42, 0.09],
+  [0.55, 0.02, 0.48, 0.31, 0.66],
+  [0.17, 0.39, 0.24, 0.58, 0.11],
+]
+
+export const patternGrid = [
+  [0.95, 0.1, 0.1, 0.1, 0.95],
+  [0.1, 0.95, 0.1, 0.95, 0.1],
+  [0.1, 0.1, 0.95, 0.1, 0.1],
+  [0.1, 0.95, 0.1, 0.95, 0.1],
+  [0.95, 0.1, 0.1, 0.1, 0.95],
+]
+
+<Scene autoPlayMs={2200}>
+  <Step caption="25 numbers. On their own, they mean nothing.">
+    <Matrix id="teaser" values={blankGrid} colorScale="sequential" />
+  </Step>
+  <Step caption="Color the exact same kind of grid, and a shape jumps out.">
+    <Matrix id="teaser" values={patternGrid} colorScale="sequential" />
+  </Step>
+</Scene>
+
+Hover any cell above — you'll see it highlight its whole row and column, because
+that's how you'll read every real diagram in this series too. Attention scores,
+gradients, model predictions — all of it is "a matrix, visualized," exactly like
+this. Once you know how to read one of these, you can read all of them.
+
+## The roadmap
+
+Three acts:
+
+1. **The forward pass** — what actually happens, step by step, to a sentence as it
+   passes through the model. Tokenizing, embedding, attention, and the full GPT
+   architecture, assembled and running (badly — it isn't trained yet).
+2. **Training** — how the model goes from confident nonsense to real language, by
+   watching a loss number go down. We'll train a small model live, and then load
+   OpenAI's real GPT-2 weights into our own code.
+3. **Finetuning** — turning a text-completer into a tool: a spam classifier, and a
+   model that follows instructions.
+
+## The stack
+
+Python and PyTorch, real code, and a real (small-scale) training run on ordinary
+laptop hardware — no supercomputer or GPU cluster required to follow along with
+anything in this series.
+
+Every diagram you'll see in the videos is also a live page on this companion site —
+open it, hover things, step through the animations yourself. Let's start with the
+very first thing a model has to solve: [text isn't numbers](/series/01-text-becomes-numbers).

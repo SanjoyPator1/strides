@@ -1,0 +1,152 @@
+---
+title: From generator to classifier
+description: Swap the language model head for a two-neuron classification head, freeze the transformer layers, and train only the new head to turn GPT into a spam detector in minutes.
+---
+
+GPT-2 was trained to predict the next token. We want to classify text as spam or not
+spam. These tasks seem different, but the transformer's internal representations — the
+768-dimensional context vectors at every token position — are just as useful for
+classification. We just need to replace the output head.
+
+## The architectural change
+
+A GPT-2 language model head maps from `emb_dim → vocab_size` (768 → 50,257).
+A spam classifier maps from `emb_dim → num_classes` (768 → 2).
+
+Everything else stays the same. We freeze the 12 transformer blocks (they already encode
+rich language representations from pretraining), and only train the new classification head.
+
+```python cell
+import torch.nn as nn
+
+class GPTClassifier(nn.Module):
+    def __init__(self, base_model, num_classes=2):
+        super().__init__()
+        self.gpt       = base_model
+        self.out_head  = nn.Linear(
+            base_model.cfg["emb_dim"], num_classes, bias=False
+        )
+
+        # Freeze all transformer blocks — only train the new head
+        for param in self.gpt.parameters():
+            param.requires_grad = False
+
+        # Optionally unfreeze the last 1-2 transformer blocks for fine-tuning
+        # for param in self.gpt.trf_blocks[-1].parameters():
+        #     param.requires_grad = True
+
+    def forward(self, x):
+        # x: (batch, seq_len)  — token IDs
+        with torch.no_grad():             # no grad through frozen layers
+            hidden = self.gpt.trf_blocks(
+                self.gpt.drop_emb(
+                    self.gpt.tok_emb(x) +
+                    self.gpt.pos_emb(torch.arange(x.shape[1], device=x.device))
+                )
+            )
+        hidden = self.gpt.final_norm(hidden)   # (batch, T, 768)
+        logits = self.out_head(hidden[:, -1, :])  # take LAST token: (batch, 2)
+        return logits
+```
+
+The key decision: **use the last token's hidden state** for the classification logit.
+GPT is a causal model — the last token's vector has attended to every preceding token
+and contains a compressed representation of the whole sequence. This is the standard
+choice for decoder-only classifiers.
+
+export const archDiagram = [
+  [1,1,1],
+  [1,1,1],
+  [1,1,1],
+  [1,1,1],
+]
+
+<Scene>
+  <Step caption="Original GPT — language model head outputs 50,257 logits (vocab scores) at every position.">
+    <Matrix id="arch" values={[[768],[768],[768],[50257]]} rowLabels={["Transformer×12","LayerNorm","last token","LM head →"]} colLabels={["dim"]} colorScale="sequential" precision={0} cellSize={70} />
+  </Step>
+  <Step caption="Classifier — swap LM head (768→50257) for classification head (768→2). Freeze everything else.">
+    <Matrix id="arch" values={[[768],[768],[768],[2]]} rowLabels={["Transformer×12","LayerNorm","last token","CLS head →"]} colLabels={["dim"]} colorScale="sequential" precision={0} cellSize={70} />
+  </Step>
+</Scene>
+
+## Dataset and training
+
+```python cell
+from torch.utils.data import Dataset, DataLoader
+
+class SpamDataset(Dataset):
+    def __init__(self, csv_file, tokenizer, max_length=None):
+        self.data = pd.read_csv(csv_file)
+        self.encoded = [
+            tokenizer.encode(text) for text in self.data["Text"]
+        ]
+        if max_length is None:
+            max_length = max(len(enc) for enc in self.encoded)
+        self.max_length = max_length
+
+    def __getitem__(self, idx):
+        enc = self.encoded[idx][:self.max_length]
+        # Pad if needed
+        padded = enc + [0] * (self.max_length - len(enc))
+        return (
+            torch.tensor(padded, dtype=torch.long),
+            torch.tensor(self.data.iloc[idx]["Label"], dtype=torch.long)
+        )
+
+    def __len__(self):
+        return len(self.data)
+```
+
+```python cell
+model_cls = GPTClassifier(gpt_model, num_classes=2)
+optimizer = torch.optim.AdamW(
+    model_cls.out_head.parameters(), lr=5e-5  # only classify head params
+)
+
+def train_classifier(model, loader, optimizer, device, num_epochs=3):
+    model.train()
+    for epoch in range(num_epochs):
+        for input_ids, labels in loader:
+            input_ids = input_ids.to(device)
+            labels    = labels.to(device)
+            optimizer.zero_grad()
+            logits = model(input_ids)
+            loss   = F.cross_entropy(logits, labels)
+            loss.backward()
+            optimizer.step()
+        # eval accuracy after each epoch
+        acc = evaluate_accuracy(model, val_loader, device)
+        print(f"Epoch {epoch+1}: val_acc={acc:.3f}")
+```
+
+With only the 2-class head trained (1,536 parameters), accuracy on the SMS spam dataset
+reaches ~95% within 3 epochs. The 124M frozen parameters already know English — we're
+just teaching the head to route the signal.
+
+## Why freeze?
+
+Training all 124M parameters on a small labeled dataset (SMS spam has ~5,000 examples)
+causes catastrophic forgetting — the model overwrites its English knowledge to fit the
+small dataset. Freezing preserves the pretrained representations and only updates the
+1,536 parameters of the new head, avoiding overfitting entirely.
+
+## Evaluating
+
+```python cell
+def evaluate_accuracy(model, loader, device):
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for input_ids, labels in loader:
+            logits = model(input_ids.to(device))
+            preds  = logits.argmax(dim=-1)
+            correct += (preds == labels.to(device)).sum().item()
+            total   += len(labels)
+    return correct / total
+
+print(f"Test accuracy: {evaluate_accuracy(model_cls, test_loader, device):.1%}")
+# Test accuracy: 95.3%
+```
+
+Next: [Batching instructions — the instruction fine-tuning data pipeline](/series/15-batching-instructions).

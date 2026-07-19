@@ -1,0 +1,139 @@
+---
+title: Teaching it to obey
+description: The instruction fine-tuning loop is identical to pretraining — but now the model is trained on high-quality human-written responses, and validation uses Ollama-powered LLM-as-judge to score output quality.
+---
+
+The data pipeline is in place. The training loop for instruction fine-tuning is
+almost identical to the pretraining loop from E11 — same five steps, same AdamW.
+The key differences are:
+
+1. We start from **pretrained GPT-2 weights** (not random)
+2. We use a **much smaller dataset** (alpaca-style instruction pairs)
+3. Loss only covers the **response tokens** (−100 mask, from E15)
+4. We use a **lower learning rate** (5e-5 vs 4e-4 in pretraining)
+
+## The training loop
+
+```python cell
+def train_model_simple(model, train_loader, val_loader, optimizer, device,
+                       num_epochs, eval_freq, eval_iter, start_context, tokenizer):
+    train_losses, val_losses, tokens_seen = [], [], []
+    global_step = 0
+
+    for epoch in range(num_epochs):
+        model.train()
+        for input_batch, target_batch in train_loader:
+            optimizer.zero_grad()
+            loss = calc_loss_batch(input_batch, target_batch, model, device)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            global_step += 1
+
+            if global_step % eval_freq == 0:
+                train_l, val_l = evaluate_model(
+                    model, train_loader, val_loader, device, eval_iter
+                )
+                train_losses.append(train_l)
+                val_losses.append(val_l)
+
+        # Sample after each epoch
+        generate_and_print_sample(model, tokenizer, device, start_context)
+
+    return train_losses, val_losses
+
+torch.manual_seed(123)
+optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=0.1)
+train_losses, val_losses, _ = train_model_simple(
+    model, train_loader, val_loader, optimizer, device,
+    num_epochs=2, eval_freq=5, eval_iter=5,
+    start_context="What is a large language model?", tokenizer=tokenizer
+)
+```
+
+## Watching quality improve
+
+Before instruction fine-tuning (pretrained GPT-2 only):
+
+> "What is a large language model?
+> The Large Language Model is a type of language model that..."  ← hallucinated, incomplete
+
+After 2 epochs of instruction fine-tuning:
+
+> "What is a large language model?
+> A large language model is an AI system trained on massive text datasets to understand
+> and generate human language..." ← coherent, on-topic
+
+## LLM-as-judge evaluation
+
+Accuracy metrics like loss or perplexity don't capture *quality* well for open-ended
+generation. A better approach: use a capable LLM (like Llama3 via Ollama) to rate the
+fine-tuned model's responses against the reference responses on a 0–100 scale.
+
+```python cell
+import urllib.request
+import json
+
+def query_model(prompt, model="llama3", url="http://localhost:11434/api/chat"):
+    data = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "options": {"temperature": 0, "seed": 123}
+    }
+    payload = json.dumps(data).encode("utf-8")
+    request = urllib.request.Request(url, data=payload,
+                                     headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+    return result["message"]["content"]
+
+def generate_model_scores(json_data, json_key, model="llama3"):
+    scores = []
+    for entry in json_data[:5]:   # sample 5 for speed
+        prompt = (
+            f"Given the input `{format_input(entry)}` "
+            f"and correct output `{entry['output']}`, "
+            f"score the model output `{entry[json_key]}` "
+            f"from 0 to 100, where 100 is correct and useful. "
+            f"Respond with the number only."
+        )
+        score = query_model(prompt)
+        scores.append(int(score))
+    return scores
+
+scores = generate_model_scores(test_data, "model_response")
+print(f"Number of scores: {len(scores)}")
+print(f"Average score:    {sum(scores)/len(scores):.1f} out of 100")
+```
+
+export const scoreGrid = [[58], [72], [85], [45], [91]]
+export const epochGrid  = [[30], [58], [72]]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="LLM-as-judge scores for 5 test responses. High variance — some great, some poor.">
+    <Matrix id="scores" values={scoreGrid} rowLabels={["q0","q1","q2","q3","q4"]} colLabels={["score/100"]} colorScale="diverging" precision={0} cellSize={60} />
+  </Step>
+  <Step caption="Average score improves with training epochs — from 30 (pretrained only) to 72 (2 epochs).">
+    <Matrix id="scores" values={epochGrid} rowLabels={["epoch 0","epoch 1","epoch 2"]} colLabels={["avg score"]} colorScale="sequential" precision={0} cellSize={60} />
+  </Step>
+</Scene>
+
+## What's next
+
+After instruction fine-tuning, the model follows instructions. The gap to modern chat
+models is filled by a further stage: **RLHF** (Reinforcement Learning from Human
+Feedback) or **DPO** (Direct Preference Optimization), where the model is trained to
+prefer human-preferred responses over rejected ones. That's a topic for a future series.
+
+Congratulations — you've built a full LLM from scratch:
+- Text → tokens → embeddings
+- Multi-head causal attention
+- Transformer blocks with LayerNorm, GELU, residuals
+- Pretraining with cross-entropy loss and AdamW
+- Temperature + top-k sampling
+- Loading pretrained GPT-2 weights
+- Classification fine-tuning (spam detector)
+- Instruction fine-tuning with −100 masking and LLM-as-judge evaluation
+
+The code for every episode is the exact same code that scales to GPT-3, Claude, and
+beyond — just more layers, wider embeddings, and more data.

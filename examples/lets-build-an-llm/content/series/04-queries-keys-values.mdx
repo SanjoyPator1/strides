@@ -1,0 +1,242 @@
+---
+title: Queries, Keys, Values
+description: Three trainable projection matrices let the model learn what to look for, what to offer, and what to contribute — replacing raw dot products with true learnable attention.
+---
+
+The attention in the last episode was driven by the raw geometry of the input embeddings.
+`"journey"` and `"starts"` scored high because their random initialization happened to
+point in similar directions — not because the model had learned anything. There were
+**no trainable parameters at all**.
+
+That limitation is fundamental. For attention to be useful, the model needs to learn its
+own notion of relevance. We fix this by introducing three learned projection matrices
+that transform each token into three different views of itself: what it is **looking for**
+(query), what it **offers** for others to match against (key), and what it actually
+**contributes** to the output (value).
+
+## The retrieval analogy
+
+Think of a video recommendation engine:
+- **Query** — what this user is looking for right now (derived from watch history)
+- **Key** — what a candidate video is tagged as (a search-index label)
+- **Value** — the actual video content that gets shown
+
+The score is `query · key` (how well does what I want match what you offer?). But the
+thing that flows into the output is the **value** — which is deliberately different from
+the key. A book's cover (key) and its contents (value) are not the same thing.
+
+Self-attention uses the same pattern but every token plays all three roles simultaneously
+— just in three different learned projections of itself.
+
+## Building Q, K, V by hand
+
+We continue with our standard 6-token sentence (`d_in = 3`, `d_out = 2` — tiny so every
+number is readable). We use `x²` = `"journey"` as the query token:
+
+```python cell
+import torch
+
+inputs = torch.tensor(
+  [[0.43, 0.15, 0.89],  # Your
+   [0.55, 0.87, 0.66],  # journey  ← our query
+   [0.57, 0.85, 0.64],  # starts
+   [0.22, 0.58, 0.33],  # with
+   [0.77, 0.25, 0.10],  # one
+   [0.05, 0.80, 0.55]]  # step
+)
+
+x_2   = inputs[1]    # journey
+d_in  = inputs.shape[1]   # 3
+d_out = 2                  # kept small for readability
+
+torch.manual_seed(123)
+W_query = torch.nn.Parameter(torch.rand(d_in, d_out), requires_grad=False)
+W_key   = torch.nn.Parameter(torch.rand(d_in, d_out), requires_grad=False)
+W_value = torch.nn.Parameter(torch.rand(d_in, d_out), requires_grad=False)
+
+query_2 = x_2 @ W_query   # (3,) @ (3,2) → (2,)
+key_2   = x_2 @ W_key
+value_2 = x_2 @ W_value
+print("query_2:", query_2)   # tensor([0.4306, 1.4551])
+
+keys   = inputs @ W_key     # (6,3) @ (3,2) → (6,2)  — all tokens' keys
+values = inputs @ W_value
+print("keys.shape:", keys.shape)
+```
+
+The three 3×2 weight matrices (from `torch.manual_seed(123)`):
+
+export const wqData = [[0.30, 0.52], [0.25, 0.69], [0.07, 0.87]]
+export const wkData = [[0.14, 0.10], [0.18, 0.73], [0.32, 0.69]]
+export const wvData = [[0.08, 0.20], [0.32, 0.40], [0.12, 0.83]]
+export const x2Data = [[0.55, 0.87, 0.66]]
+export const q2Data = [[0.43, 1.46]]
+export const k2Data = [[0.44, 1.14]]
+
+<ArrowOverlay>
+  <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap' }}>
+    <div>
+      <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--strides-color-muted)', marginBottom: '0.25rem' }}>x² "journey"</p>
+      <Matrix
+        id="qkv-x2"
+        values={x2Data}
+        anchor="x2-node"
+        colLabels={['d0', 'd1', 'd2']}
+        colorScale="sequential"
+        precision={2}
+      />
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--strides-color-muted)', marginBottom: '0.25rem' }}>W_query (3×2)</p>
+        <Matrix id="wq" values={wqData} colLabels={['o0','o1']} colorScale="diverging" precision={2} />
+      </div>
+      <div>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--strides-color-muted)', marginBottom: '0.25rem' }}>W_key (3×2)</p>
+        <Matrix id="wk" values={wkData} colLabels={['o0','o1']} colorScale="diverging" precision={2} />
+      </div>
+      <div>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--strides-color-muted)', marginBottom: '0.25rem' }}>W_value (3×2)</p>
+        <Matrix id="wv" values={wvData} colLabels={['o0','o1']} colorScale="diverging" precision={2} />
+      </div>
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--strides-color-muted)', marginBottom: '0.25rem' }}>query_2</p>
+        <Matrix id="q2" values={q2Data} colLabels={['q0','q1']} colorScale="sequential" precision={2} />
+      </div>
+      <div>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--strides-color-muted)', marginBottom: '0.25rem' }}>key_2</p>
+        <Matrix id="k2" values={k2Data} colLabels={['k0','k1']} colorScale="sequential" precision={2} />
+      </div>
+    </div>
+  </div>
+</ArrowOverlay>
+
+## Scaled dot-product attention
+
+Now compute `query_2 · keys[i]` for every token:
+
+```python cell
+keys_2 = keys[1]                         # key vector for "journey"
+attn_score_22 = query_2.dot(keys_2)
+print("score (journey→journey):", attn_score_22)  # 1.8524
+
+attn_scores_2 = query_2 @ keys.T
+print("all scores:", attn_scores_2)
+# tensor([1.2705, 1.8524, 1.8111, 1.0795, 0.5577, 1.5440])
+```
+
+Same idea as before — but now we're taking the dot product of **learned** query and key
+vectors, not the raw input embeddings. The model can adjust W_query and W_key during
+training to make "relevant" tokens score higher regardless of their raw embedding direction.
+
+### Why divide by √d_k?
+
+```python cell
+d_k = keys.shape[-1]   # 2 here; 64 in GPT-2 (768 / 12 heads)
+attn_weights_2 = torch.softmax(attn_scores_2 / d_k**0.5, dim=-1)
+print(attn_weights_2)
+# tensor([0.1500, 0.2264, 0.2199, 0.1311, 0.0906, 0.1820])
+```
+
+The variance of `q · k` grows linearly with `d_k` — more dimensions, larger dot products,
+more extreme softmax. Dividing by √d_k brings the variance back to 1, keeping softmax in
+a useful range no matter how wide the heads are.
+
+export const rawScores = [[1.2705], [1.8524], [1.8111], [1.0795], [0.5577], [1.5440]]
+export const scaledWeights = [[0.1500], [0.2264], [0.2199], [0.1311], [0.0906], [0.1820]]
+export const shortToks = ["Your", "journ", "start", "with", "one", "step"]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="q · k scores — large magnitude because d_k dimensions accumulate variance">
+    <Matrix id="qkv-scores" values={rawScores} rowLabels={shortToks} colLabels={["q·k"]} colorScale="sequential" precision={4} />
+  </Step>
+  <Step caption="After ÷√d_k + softmax — scores compressed back to a valid probability distribution">
+    <Matrix id="qkv-scores" values={scaledWeights} rowLabels={shortToks} colLabels={["weight α"]} colorScale="sequential" precision={4} />
+  </Step>
+</Scene>
+
+## The value matmul — cashing in the weights
+
+```python cell
+context_vec_2 = attn_weights_2 @ values
+print(context_vec_2)
+# tensor([0.3061, 0.8210])
+```
+
+The query and key vectors determined *how much* attention to pay to each position.
+The **value** vectors are what actually flows into the output. This separation — query
+and key for matching, value for contributing — is what gives the model three independent
+degrees of freedom per token to work with.
+
+## Packing it into SelfAttention_v1
+
+```python cell
+import torch.nn as nn
+
+class SelfAttention_v1(nn.Module):
+    def __init__(self, d_in, d_out):
+        super().__init__()
+        self.W_query = nn.Parameter(torch.rand(d_in, d_out))
+        self.W_key   = nn.Parameter(torch.rand(d_in, d_out))
+        self.W_value = nn.Parameter(torch.rand(d_in, d_out))
+
+    def forward(self, x):
+        queries = x @ self.W_query      # (T, d_in) @ (d_in, d_out) → (T, d_out)
+        keys    = x @ self.W_key
+        values  = x @ self.W_value
+
+        attn_scores  = queries @ keys.T                    # (T, T)
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+
+        context_vec  = attn_weights @ values               # (T, d_out)
+        return context_vec
+
+torch.manual_seed(123)
+sa_v1 = SelfAttention_v1(d_in=3, d_out=2)
+print(sa_v1(inputs))
+# row 1 → [0.3061, 0.8210] — matches manual calc above ✓
+```
+
+`forward` is exactly the four-step algorithm from this episode, generalized from one query
+to all six tokens at once. Row 1 of the output `[0.3061, 0.8210]` is identical to
+`context_vec_2` from the manual computation — proof that the class is correct.
+
+## Upgrading to nn.Linear: SelfAttention_v2
+
+`nn.Parameter(torch.rand(...))` initializes weights uniformly on [0, 1), which is a
+poor start for deep networks. `nn.Linear` uses Kaiming/He initialization (zero-mean,
+better variance), composes cleanly with the optimizer, and handles bias automatically:
+
+```python cell
+class SelfAttention_v2(nn.Module):
+    def __init__(self, d_in, d_out, qkv_bias=False):
+        super().__init__()
+        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key   = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+
+    def forward(self, x):
+        queries = self.W_query(x)       # equivalent to x @ W.T (nn.Linear stores W.T)
+        keys    = self.W_key(x)
+        values  = self.W_value(x)
+
+        attn_scores  = queries @ keys.transpose(-2, -1)
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        return attn_weights @ values
+
+torch.manual_seed(789)
+sa_v2 = SelfAttention_v2(d_in=3, d_out=2)
+print(sa_v2(inputs))
+# Different numbers from v1 — different seed and initialization
+# Same algorithm, same output shape
+```
+
+`v1` and `v2` produce different numbers because of the different seeds and initialization
+— not because the math differs. If you copy `v2`'s weight matrices into `v1`'s parameters,
+the outputs become identical.
+
+The algorithm inside both is exactly one formula: **Attention(Q, K, V) = softmax(QKᵀ / √dₖ) V**
+
+Next: [Don't look ahead — causal masking](/series/05-dont-look-ahead).

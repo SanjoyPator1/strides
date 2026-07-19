@@ -1,0 +1,154 @@
+---
+title: What does it mean to be wrong?
+description: Cross-entropy loss turns a vague "the model is bad" into a differentiable number that gradients can descend — built from target probabilities, their logs, an average, and a sign flip.
+---
+
+We have a model that generates text. It's bad. The output is gibberish. But *how bad*?
+And more importantly — bad in a way that gives us a gradient to improve?
+
+**Cross-entropy loss** is the answer. It's a single number that is large when the model
+assigns low probability to the correct next token and small (approaching 0) when the
+model assigns high probability. It's fully differentiable, so backpropagation can compute
+exactly how to nudge every weight to make it smaller.
+
+This episode builds cross-entropy from scratch, step by step.
+
+## The training pair
+
+Every training step uses a pair of tensors, offset by one position:
+
+```python cell
+import torch
+import tiktoken
+
+inputs = torch.tensor([[16833, 3626, 6100],   # "every effort moves"
+                       [40,    1107,  588]])  # "I really like"
+
+targets = torch.tensor([[3626, 6100,  345],   # " effort moves you"
+                        [1107,  588, 11311]])  # " really like chocolate"
+```
+
+For every token in `inputs`, `targets` holds the correct next token. At position 0 in
+batch 0, the input is `"every"` (ID 16833) and the correct next word is `" effort"`
+(ID 3626). The model's job at every position: predict the target.
+
+export const inputGrid = [[16833, 3626, 6100], [40, 1107, 588]]
+export const targetGrid = [[3626, 6100, 345], [1107, 588, 11311]]
+
+<Scene autoPlayMs={2500}>
+  <Step caption="Inputs — what the model reads. Each integer is a token ID into the 50k vocabulary.">
+    <Matrix id="io-pair" values={inputGrid} rowLabels={["b0","b1"]} colLabels={["pos 0","pos 1","pos 2"]} colorScale="sequential" precision={0} cellSize={70} />
+  </Step>
+  <Step caption="Targets — the correct NEXT token at every position. targets = inputs shifted left by one.">
+    <Matrix id="io-pair" values={targetGrid} rowLabels={["b0","b1"]} colLabels={["pos 0","pos 1","pos 2"]} colorScale="sequential" precision={0} cellSize={70} />
+  </Step>
+</Scene>
+
+## Step 1 — logits and softmax
+
+A forward pass gives one 50,257-dimensional vector per position:
+
+```python cell
+with torch.no_grad():
+    logits = model(inputs)               # (2, 3, 50257)
+
+probas = torch.softmax(logits, dim=-1)   # (2, 3, 50257)
+print("probas shape:", probas.shape)
+print("row 0 sum:", probas[0, 0].sum().item())   # ≈ 1.0
+```
+
+Each row `probas[b, t, :]` is a full probability distribution over the vocabulary —
+the model's guess at what comes next given everything up to position `t`.
+
+## Step 2 — pull the target probabilities
+
+We only need the probabilities assigned to the *correct* tokens:
+
+```python cell
+# For batch 0: targets are [3626, 6100, 345]
+# Pull probas[0, 0, 3626], probas[0, 1, 6100], probas[0, 2, 345]
+tp1 = probas[0, [0, 1, 2], targets[0]]
+tp2 = probas[1, [0, 1, 2], targets[1]]
+print("Batch 0 target probs:", tp1)
+# tensor([7.45e-05, 3.11e-05, 1.16e-05])
+print("Batch 1 target probs:", tp2)
+# tensor([1.03e-05, 4.62e-05, 5.58e-05])
+```
+
+All six values are around `2e-5` — the uniform baseline for 50,257 tokens. A perfectly
+trained model would have all six at 1.0.
+
+## Step 3 — why log?
+
+Naive approach: multiply all 6 probabilities to get the joint probability of being
+correct at every position:
+
+```
+7.45e-5 × 3.11e-5 × 1.16e-5 × 1.03e-5 × 4.62e-5 × 5.58e-5 ≈ 10⁻²⁷
+```
+
+With 1024 tokens, that would be `(2e-5)^1024 ≈ 10⁻⁵⁰⁵⁰` — float32 underflows to
+exactly `0.0`, and the gradient vanishes with it.
+
+**Log turns products into sums, and never underflows:**
+
+```python cell
+log_probas = torch.log(torch.cat((tp1, tp2)))
+print(log_probas)
+# tensor([-9.50, -10.38, -11.37, -11.48, -9.78, -12.26])
+
+avg = log_probas.mean()
+loss = avg * -1                # negate: optimizer descends, so loss must be positive
+print("Loss:", loss.item())    # 10.7940
+```
+
+export const targetProbsViz = [[7.45e-5], [3.11e-5], [1.16e-5], [1.03e-5], [4.62e-5], [5.58e-5]]
+export const logProbsViz = [[-9.50], [-10.38], [-11.37], [-11.48], [-9.78], [-12.26]]
+export const negLogProbsViz = [[9.50], [10.38], [11.37], [11.48], [9.78], [12.26]]
+export const posLabels = ["b0·p0","b0·p1","b0·p2","b1·p0","b1·p1","b1·p2"]
+
+<Scene autoPlayMs={2000}>
+  <Step caption="Target probabilities — all near 2e-5. Model has no idea what's correct.">
+    <Matrix id="loss-chain" values={targetProbsViz} rowLabels={posLabels} colLabels={["prob"]} colorScale="sequential" precision={5} cellSize={60} />
+  </Step>
+  <Step caption="After log(p) — large negative numbers. Low probability → very negative.">
+    <Matrix id="loss-chain" values={logProbsViz} rowLabels={posLabels} colLabels={["log(p)"]} colorScale="diverging" precision={2} cellSize={60} />
+  </Step>
+  <Step caption="After −log(p) — positive, large when wrong, zero when perfect. Average = 10.79 = the loss.">
+    <Matrix id="loss-chain" values={negLogProbsViz} rowLabels={posLabels} colLabels={["−log(p)"]} colorScale="sequential" precision={2} cellSize={60} />
+  </Step>
+</Scene>
+
+The loss of **10.79** is close to `log(50257) ≈ 10.82` — the theoretical maximum loss
+for a perfectly uniform distribution over 50,257 tokens. An untrained model that knows
+nothing achieves almost exactly the maximum possible loss.
+
+## Step 4 — PyTorch's one-liner
+
+```python cell
+import torch.nn.functional as F
+
+logits_flat  = logits.flatten(0, 1)    # (6, 50257) — batch and seq merged
+targets_flat = targets.flatten()        # (6,)
+
+loss = F.cross_entropy(logits_flat, targets_flat)
+print(loss)   # tensor(10.7940) — identical to the manual calculation ✓
+```
+
+`F.cross_entropy` fuses softmax, log, gather, average, negate into one numerically
+stable kernel. It takes raw logits (not probabilities) — applying softmax first and
+then passing to `cross_entropy` applies softmax *twice*, giving silently wrong results.
+
+## Perplexity — the human-readable version
+
+```python cell
+perplexity = torch.exp(loss)
+print(f"Perplexity: {perplexity:.1f}")   # ~48754
+```
+
+Perplexity is `e^loss`. An untrained model has perplexity ≈ 48,754 — roughly equal
+to the vocabulary size (50,257), meaning the model is as confused as if it were
+guessing uniformly at random from the full vocabulary. A well-trained GPT-2 small
+achieves perplexity around 30 on test data.
+
+Next: [Feeding the model — the data pipeline](/series/10-feeding-the-model).

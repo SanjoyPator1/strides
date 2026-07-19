@@ -1,0 +1,243 @@
+---
+title: Text becomes numbers
+description: Neural networks only do math on numbers — so what number is a word? We build a tokenizer from scratch, break it on purpose, and fix it twice.
+---
+
+A neural network can only multiply and add. It has no idea what a "word" is. So before
+anything else can happen, we need an answer to a very literal question: **what number
+is the word "cat"?** And a harder one: **what number is a word the model has never
+seen before?**
+
+This episode builds that answer up from nothing, in the same order it actually
+breaks: a naive tokenizer, then a smarter one, then one that still crashes on unknown
+words, then the fix real models actually use.
+
+## Step 1 — just split on whitespace
+
+We'll work with a real short story, *The Verdict*, as our source text throughout this
+episode.
+
+```python cell
+with open("data/the-verdict.txt", "r", encoding="utf-8") as f:
+    raw_text = f.read()
+
+print(f"{len(raw_text)} characters")
+print(raw_text[:200])
+```
+
+The dumbest possible tokenizer just splits on spaces:
+
+```python cell
+text = "Hello, world. This, is a test."
+result = text.split()
+print(result)
+```
+
+That leaves punctuation glued to words — `"world."` and `"world"` would become two
+completely different vocabulary entries, for no real reason.
+
+## Step 2 — split on punctuation too, with regex
+
+```python cell
+import re
+
+result = re.split(r'([,.:;?_!"()\']|--|\s)', text)
+result = [item.strip() for item in result if item.strip()]
+print(result)
+```
+
+Reading the pattern: match any of `,.:;?_!"()'` as a single character, or the
+double-dash `--` as one unit (checked before individual characters, so `"this--"`
+doesn't become `"this", "-", "-"`), or any whitespace — then throw away anything
+that's empty or pure whitespace once split.
+
+Now apply it to the whole story:
+
+```python cell
+preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', raw_text)
+preprocessed = [item.strip() for item in preprocessed if item.strip()]
+print(preprocessed[:20])
+print(len(preprocessed), "tokens total")
+```
+
+*The Verdict* tokenizes into a few thousand tokens with this scheme. That number is
+the length of the sequence we're about to build IDs for.
+
+## Step 3 — turn token strings into token IDs
+
+A neural network needs integers, not strings. We build a vocabulary — every unique
+token, sorted, numbered — and a class that can go back and forth between text and IDs:
+
+```python cell
+all_words = sorted(set(preprocessed))
+vocab = {token: integer for integer, token in enumerate(all_words)}
+print(len(vocab), "unique tokens")
+print(list(vocab.items())[:5])
+```
+
+```python cell
+class SimpleTokenizerV1:
+    def __init__(self, vocab):
+        self.str_to_int = vocab
+        self.int_to_str = {i: s for s, i in vocab.items()}
+
+    def encode(self, text):
+        preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', text)
+        preprocessed = [item.strip() for item in preprocessed if item.strip()]
+        ids = [self.str_to_int[s] for s in preprocessed]
+        return ids
+
+    def decode(self, ids):
+        text = " ".join([self.int_to_str[i] for i in ids])
+        text = re.sub(r'\s+([,.?!"()\'])', r'\1', text)
+        return text
+
+
+tokenizer = SimpleTokenizerV1(vocab)
+text = """"It's the last he painted, you know," Mrs. Gisburn said with pardonable pride."""
+ids = tokenizer.encode(text)
+print(ids[:10])
+print(tokenizer.decode(ids))
+```
+
+Two dictionaries, not one: `encode` needs *string → integer*, `decode` needs the
+opposite, so we build both directions once up front instead of scanning backwards on
+every lookup. Notice the decoded text reads `"It' s"` rather than `"It's"` — encoding
+already threw away the information that the apostrophe glues `It` and `s` together.
+That's a small, honest crack in this tokenizer, and it's a preview of a much bigger
+one.
+
+## Step 4 — break it on purpose
+
+```python cell
+tokenizer = SimpleTokenizerV1(vocab)
+text = "Hello, do you like tea?"
+tokenizer.encode(text)
+```
+
+That raises a `KeyError: 'Hello'`. `"Hello"` never appears anywhere in *The Verdict*,
+so it has no entry in our vocabulary — and a plain dictionary lookup has no fallback.
+Real text will always contain words a fixed, finite vocabulary has never seen: names,
+typos, foreign words, made-up compounds. Any real tokenizer needs an answer for "I
+don't recognize this."
+
+## Step 5 — patch it with a special `<|unk|>` token
+
+```python cell
+all_tokens = sorted(set(preprocessed))
+all_tokens.extend(["<|endoftext|>", "<|unk|>"])
+vocab = {token: integer for integer, token in enumerate(all_tokens)}
+print(len(vocab), "tokens now")
+```
+
+```python cell
+class SimpleTokenizerV2:
+    def __init__(self, vocab):
+        self.str_to_int = vocab
+        self.int_to_str = {i: s for s, i in vocab.items()}
+
+    def encode(self, text):
+        preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', text)
+        preprocessed = [item.strip() for item in preprocessed if item.strip()]
+        preprocessed = [
+            item if item in self.str_to_int else "<|unk|>"
+            for item in preprocessed
+        ]
+        ids = [self.str_to_int[s] for s in preprocessed]
+        return ids
+
+    def decode(self, ids):
+        text = " ".join([self.int_to_str[i] for i in ids])
+        text = re.sub(r'\s+([,.?!"()\'])', r'\1', text)
+        return text
+
+
+tokenizer = SimpleTokenizerV2(vocab)
+text1 = "Hello, do you like tea?"
+text2 = "In the sunlit terraces of the palace."
+text = " <|endoftext|> ".join((text1, text2))
+
+print(tokenizer.encode(text))
+print(tokenizer.decode(tokenizer.encode(text)))
+```
+
+This no longer crashes — but look closely at what got lost. `"Hello"` and `"palace"`
+are both replaced by the exact same `<|unk|>` ID. Two completely different words
+became indistinguishable to the model. This is the ceiling of the word-level
+approach: the only way to never crash is to throw away information the moment
+something's unfamiliar.
+
+## Step 6 — the real fix: subwords, not whole words
+
+GPT-2 doesn't tokenize whole words at all. It uses **byte-pair encoding (BPE)** — a
+vocabulary of common subword pieces, built so that *any* string can always be
+assembled from pieces it already knows, all the way down to individual bytes if it
+has to. There is no such thing as an unrecognized string for BPE, so there's no
+`<|unk|>` to ever need.
+
+```python cell
+import tiktoken
+
+bpe = tiktoken.get_encoding("gpt2")
+
+text = "Hello, do you like tea? <|endoftext|> In the sunlit terraces of someunknownPlace."
+integers = bpe.encode(text, allowed_special={"<|endoftext|>"})
+print(integers)
+print(bpe.decode(integers))
+```
+
+That round-trips *exactly* — spacing and all — because BPE encodes raw text
+(including spaces) as part of its tokens, instead of throwing whitespace away the
+way our regex tokenizer did. And the made-up word:
+
+```python cell
+pieces = [bpe.decode([t]) for t in bpe.encode("someunknownPlace")]
+print(pieces)
+```
+
+`"someunknownPlace"` never appeared in GPT-2's training data, and it still splits
+cleanly into real, recognizable pieces — `some`, `unknown`, `Place` — instead of
+crashing or collapsing into a meaningless placeholder.
+
+## From tokens to a real pipeline
+
+Real GPT-2 BPE ids for two sentences, drilled all the way down to an embedding row —
+click through it. The token IDs below came from exactly the `tiktoken.get_encoding("gpt2")`
+tokenizer above:
+
+<TokenJourney
+  sequences={[
+    {
+      label: 'batch 0',
+      text: 'Your journey starts with one step',
+      tokens: [
+        { text: 'Your', id: 7120, embedding: [0.43, 0.15, 0.89] },
+        { text: ' journey', id: 7002, embedding: [0.55, 0.87, 0.66] },
+        { text: ' starts', id: 4940, embedding: [0.57, 0.85, 0.64] },
+        { text: ' with', id: 351, embedding: [0.22, 0.58, 0.33] },
+        { text: ' one', id: 530, embedding: [0.77, 0.25, 0.1] },
+        { text: ' step', id: 2239, embedding: [0.05, 0.8, 0.55] },
+      ],
+    },
+    {
+      label: 'batch 1',
+      text: 'Every effort moves you forward',
+      tokens: [
+        { text: 'Every', id: 6109, embedding: [0.12, 0.61, 0.35] },
+        { text: ' effort', id: 3626, embedding: [0.48, 0.09, 0.77] },
+        { text: ' moves', id: 6100, embedding: [0.83, 0.44, 0.21] },
+        { text: ' you', id: 345, embedding: [0.31, 0.72, 0.58] },
+        { text: ' forward', id: 2651, embedding: [0.66, 0.28, 0.9] },
+      ],
+    },
+  ]}
+/>
+
+Notice the chips render a leading space as `␣` — GPT-2 genuinely keeps it, because
+`␣journey` and `journey` are different tokens. That's part of why BPE round-trips
+text exactly, and no information is ever thrown away.
+
+An ID like `7002` doesn't mean anything by itself — it's a row number, an index into
+a big lookup table with one row per vocabulary entry (50,257 rows for GPT-2). Those
+rows start out as random numbers, and get *learned* during training. That lookup —
+turning an ID into a meaningful vector — is where we're headed next.

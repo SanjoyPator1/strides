@@ -1,0 +1,172 @@
+---
+title: The training loop
+description: A single Python loop — forward, loss, backward, clip, step — trains our GPT model from random noise toward coherent language generation.
+---
+
+We have the model, the data pipeline, the loss function. All that remains is the loop
+that iterates them until the model learns. Every training step is exactly five operations.
+
+## The loop
+
+```python cell
+import torch
+
+def train_model_simple(
+    model, train_loader, val_loader,
+    optimizer, device,
+    num_epochs, eval_freq, eval_iter,
+    start_context, tokenizer
+):
+    train_losses, val_losses, track_tokens_seen = [], [], []
+    tokens_seen = 0
+    global_step = 0
+
+    for epoch in range(num_epochs):
+        model.train()                           # enable dropout
+
+        for input_batch, target_batch in train_loader:
+            optimizer.zero_grad()               # ① clear old gradients
+
+            loss = calc_loss_batch(             # ② forward + loss
+                input_batch, target_batch, model, device
+            )
+            loss.backward()                     # ③ backpropagate
+
+            torch.nn.utils.clip_grad_norm_(     # ④ gradient clipping
+                model.parameters(), max_norm=1.0
+            )
+            optimizer.step()                    # ⑤ update weights
+
+            tokens_seen += input_batch.numel()
+            global_step += 1
+
+            if global_step % eval_freq == 0:
+                train_l, val_l = evaluate_model(
+                    model, train_loader, val_loader, device, eval_iter
+                )
+                train_losses.append(train_l)
+                val_losses.append(val_l)
+                track_tokens_seen.append(tokens_seen)
+                print(f"Ep {epoch+1} Step {global_step:06d} | "
+                      f"Train: {train_l:.3f} | Val: {val_l:.3f}")
+
+        generate_and_print_sample(model, tokenizer, device, start_context)
+
+    return train_losses, val_losses, track_tokens_seen
+```
+
+## The five operations
+
+Each operation is essential. Removing any one of them causes different but equally
+catastrophic failures:
+
+export const stepsGrid = [
+  [1], [2], [3], [4], [5]
+]
+
+<Matrix
+  values={stepsGrid}
+  rowLabels={["zero_grad","forward+loss","backward","clip_grad","step"]}
+  colLabels={["step"]}
+  colorScale="sequential"
+  precision={0}
+  cellSize={56}
+/>
+
+**① zero_grad** — gradients accumulate by default in PyTorch. Without clearing them,
+gradients from step 100 are *added* to gradients from step 99, then step 98, and so on.
+The gradient grows unboundedly and the optimizer takes absurdly large steps.
+
+**② forward + loss** — runs the model to get logits, then computes cross-entropy. This
+builds the computation graph that backward will traverse.
+
+**③ backward** — automatically differentiates the loss with respect to every parameter.
+After this call, `p.grad` holds the gradient for every parameter `p`.
+
+**④ clip_grad_norm** — scales all gradients down if their combined L2 norm exceeds 1.0.
+Prevents "gradient explosion" — rare spikes in the loss landscape that would otherwise
+push weights far from their optimum in a single step.
+
+**⑤ step** — uses the gradients to update every parameter. For AdamW, this is more than
+just `w -= lr * grad`; it maintains per-parameter momentum and adapts the learning rate.
+
+## The optimizer: AdamW
+
+```python cell
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=0.0004,       # 4e-4 — typical for small GPT pretraining from scratch
+    weight_decay=0.1 # L2 penalty on weights, not on biases/LayerNorm params (AdamW fix)
+)
+```
+
+AdamW (Adam with decoupled weight decay) is the default optimizer for transformers.
+The "W" suffix distinguishes it from original Adam, which incorrectly applied weight
+decay inside the adaptive moment update — AdamW applies it separately, which works
+correctly with adaptive learning rates.
+
+## Running 10 epochs
+
+```python cell
+torch.manual_seed(123)
+
+train_losses, val_losses, tokens_seen = train_model_simple(
+    model, train_loader, val_loader,
+    optimizer, device,
+    num_epochs=10,
+    eval_freq=5,
+    eval_iter=5,
+    start_context="Every effort moves you",
+    tokenizer=tokenizer
+)
+```
+
+Typical loss curve on *The Verdict* (a short story, ~5,000 tokens):
+
+export const epochLosses = [
+  [10.98], [7.43], [5.87], [4.92], [4.31], [3.84], [3.49], [3.22], [3.02], [2.87]
+]
+
+<Scene autoPlayMs={1200}>
+  <Step caption="Epoch 1 — loss near 10.98 (random baseline). Model outputs pure gibberish.">
+    <Matrix id="loss-prog" values={[[10.98]]} colLabels={["train loss"]} colorScale="sequential" precision={2} cellSize={80} />
+  </Step>
+  <Step caption="Epoch 5 — loss fallen to ~4.31. Model begins using GPT-2's vocabulary correctly.">
+    <Matrix id="loss-prog" values={[[4.31]]} colLabels={["train loss"]} colorScale="sequential" precision={2} cellSize={80} />
+  </Step>
+  <Step caption="Epoch 10 — loss ~2.87. Model produces short-story-like prose on the training data.">
+    <Matrix id="loss-prog" values={[[2.87]]} colLabels={["train loss"]} colorScale="sequential" precision={2} cellSize={80} />
+  </Step>
+</Scene>
+
+## Saving and loading
+
+```python cell
+# Save weights only (for inference)
+torch.save(model.state_dict(), "model.pth")
+
+# Load later
+model2 = GPTModel(GPT_CONFIG_124M)
+model2.load_state_dict(torch.load("model.pth", map_location=device))
+model2.eval()
+
+# Save everything (for resuming training)
+torch.save({
+    "model_state_dict":     model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+    "epoch":                10,
+    "train_losses":         train_losses,
+}, "checkpoint.pth")
+
+# Resume
+checkpoint = torch.load("checkpoint.pth")
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+```
+
+Save the optimizer state when you want to resume training exactly where you left off.
+AdamW maintains per-parameter momentum buffers — without loading them, the optimizer
+"forgets" its momentum and the first few resumed steps have worse gradients. For inference
+only, `model.state_dict()` is all you need.
+
+Next: [Taming the randomness — temperature and top-k](/series/12-taming-the-randomness).

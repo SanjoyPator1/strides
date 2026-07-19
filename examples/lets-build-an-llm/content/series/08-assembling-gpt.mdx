@@ -1,0 +1,182 @@
+---
+title: Assembling GPT
+description: We snap the transformer block together from its components, stack 12 of them, add an output head, and build the full 124M-parameter GPT-2 model — then watch it generate (nonsense) text from a prompt.
+---
+
+We have all the parts now. The transformer block is:
+
+1. LayerNorm → Multi-head causal attention → Dropout → residual add
+2. LayerNorm → FeedForward → Dropout → residual add
+
+Stack 12 of those, add a final LayerNorm and a vocabulary-projection head, and you have
+GPT-2 small. This episode assembles it, counts the parameters, and runs the first
+generation.
+
+## The config dictionary
+
+Every shape in the model is driven by a single config dict — change one value to get a
+different GPT-2 variant:
+
+```python cell
+GPT_CONFIG_124M = {
+    "vocab_size":     50257,   # BPE vocabulary
+    "context_length": 1024,    # max tokens the model can see at once
+    "emb_dim":        768,     # width of every hidden state
+    "n_heads":        12,      # heads per attention block (head_dim = 768/12 = 64)
+    "n_layers":       12,      # transformer blocks stacked
+    "drop_rate":      0.1,
+    "qkv_bias":       False,
+}
+```
+
+## TransformerBlock
+
+```python cell
+class TransformerBlock(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.att = MultiHeadAttention(
+            d_in           = cfg["emb_dim"],
+            d_out          = cfg["emb_dim"],
+            context_length = cfg["context_length"],
+            num_heads      = cfg["n_heads"],
+            dropout        = cfg["drop_rate"],
+            qkv_bias       = cfg["qkv_bias"],
+        )
+        self.ff   = FeedForward(cfg)
+        self.norm1 = LayerNorm(cfg["emb_dim"])
+        self.norm2 = LayerNorm(cfg["emb_dim"])
+        self.drop  = nn.Dropout(cfg["drop_rate"])
+
+    def forward(self, x):
+        # Sub-layer 1: attention (pre-norm pattern)
+        shortcut = x
+        x = self.norm1(x)
+        x = self.att(x)
+        x = self.drop(x)
+        x = x + shortcut      # ← residual add
+
+        # Sub-layer 2: feed-forward (pre-norm pattern)
+        shortcut = x
+        x = self.norm2(x)
+        x = self.ff(x)
+        x = self.drop(x)
+        x = x + shortcut      # ← residual add
+        return x
+```
+
+The block preserves shape: in goes `(batch, T, 768)`, out comes `(batch, T, 768)`. This
+is what makes stacking 12 copies trivial — each block's output is the next block's input.
+
+## GPTModel
+
+```python cell
+class GPTModel(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.tok_emb   = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
+        self.pos_emb   = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
+        self.drop_emb  = nn.Dropout(cfg["drop_rate"])
+        self.trf_blocks = nn.Sequential(*[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
+        self.final_norm = LayerNorm(cfg["emb_dim"])
+        self.out_head   = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
+
+    def forward(self, in_idx):
+        b, seq_len = in_idx.shape
+        tok_emb = self.tok_emb(in_idx)
+        pos_emb = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
+        x = self.drop_emb(tok_emb + pos_emb)   # (b, T, 768)
+        x = self.trf_blocks(x)                 # (b, T, 768)
+        x = self.final_norm(x)                  # (b, T, 768)
+        return self.out_head(x)                 # (b, T, 50257)
+```
+
+The shape story end-to-end:
+
+<BracketDiagram
+  name="GPT forward pass shapes"
+  levels={[
+    { name: 'batch', indexLabels: ['b0', 'b1'] },
+    { name: 'sequence (T)', indexLabels: ['t0','t1','t2','t3'] },
+    { name: 'emb_dim (768) / vocab (50257)' },
+  ]}
+  values={[
+    [[['in'],['in'],['in'],['in']],  [['emb'],['emb'],['emb'],['emb']],  [['blk'],['blk'],['blk'],['blk']],  [['out'],['out'],['out'],['out']]],
+    [[['in'],['in'],['in'],['in']],  [['emb'],['emb'],['emb'],['emb']],  [['blk'],['blk'],['blk'],['blk']],  [['out'],['out'],['out'],['out']]],
+  ]}
+  annotations={[
+    { target: [null, 0, null], label: 'integers in → (b, T)', side: 'left', color: '#6366f1' },
+    { target: [null, 3, null], label: 'logits out → (b, T, 50257)', side: 'right', color: '#f59e0b' },
+  ]}
+  indexExamples={[[0,0,0],[1,0,0]]}
+/>
+
+## Counting parameters
+
+```python cell
+torch.manual_seed(123)
+model = GPTModel(GPT_CONFIG_124M)
+
+total_params = sum(p.numel() for p in model.parameters())
+print(f"Total parameters: {total_params:,}")
+# Total parameters: 163,009,536
+
+# After weight tying (sharing tok_emb and out_head):
+shared = model.tok_emb.weight.numel()
+print(f"After weight tying: {total_params - shared:,}")
+# After weight tying: 124,412,160  ← this is the famous "124M"
+```
+
+The "124M" parameter count uses **weight tying**: the token embedding matrix
+(`50257 × 768`) is *shared* with the output head. This saves 38.6M parameters and
+slightly improves perplexity because the model learns one consistent representation for
+each token ID rather than two separate ones.
+
+export const paramBreakdown = [
+  [38.6],   // tok_emb / out_head (shared)
+  [0.8],    // pos_emb
+  [7.1],    // LayerNorm × 26
+  [28.3],   // attention Q/K/V/out × 12 blocks
+  [28.3],   // feed-forward × 12 blocks
+]
+
+<Matrix
+  values={paramBreakdown}
+  rowLabels={["tok_emb+head","pos_emb","LayerNorms","Attention×12","FeedFwd×12"]}
+  colLabels={["params (M)"]}
+  colorScale="sequential"
+  precision={1}
+  cellSize={60}
+/>
+
+## Greedy text generation
+
+```python cell
+def generate_text_simple(model, idx, max_new_tokens, context_size):
+    for _ in range(max_new_tokens):
+        idx_cond = idx[:, -context_size:]          # crop to context window
+        with torch.no_grad():
+            logits = model(idx_cond)               # (b, T, vocab_size)
+        logits = logits[:, -1, :]                  # last position only: (b, vocab_size)
+        probas = torch.softmax(logits, dim=-1)
+        idx_next = torch.argmax(probas, dim=-1, keepdim=True)  # greedily pick top token
+        idx = torch.cat((idx, idx_next), dim=1)   # append to sequence
+    return idx
+
+import tiktoken
+bpe  = tiktoken.get_encoding("gpt2")
+text = "Hello, I am"
+ids  = bpe.encode(text)
+
+idx      = torch.tensor(ids).unsqueeze(0)  # (1, T)
+out_ids  = generate_text_simple(model, idx, max_new_tokens=6, context_size=GPT_CONFIG_124M["context_length"])
+out_text = bpe.decode(out_ids.squeeze(0).tolist())
+print(out_text)
+# "Hello, I am Featureimaginedobs Tanner"  ← random, untrained
+```
+
+The output is nonsense — the weights are random. But the pipeline is correct: text in,
+tokens, embedding, 12 transformer blocks, output head, top-1 decode, more text out.
+Training is what turns the nonsense into real language.
+
+Next: [What does it mean to be wrong?](/series/09-what-does-it-mean-to-be-wrong).

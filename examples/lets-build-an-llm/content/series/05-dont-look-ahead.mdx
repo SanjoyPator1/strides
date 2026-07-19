@@ -1,0 +1,184 @@
+---
+title: Don't look ahead
+description: A language model trained to predict the next token must never see tokens from the future — causal masking enforces this by zeroing out the upper triangle of the attention weight matrix.
+---
+
+Here is a problem with the self-attention we built so far: when the model is generating
+the word at position 3, it can freely attend to positions 4, 5, and 6 — words that
+don't exist yet at inference time. If we train with this, the model can trivially learn
+to cheat: "predict the next word by looking at the next word."
+
+This is called **bidirectional** attention. It's useful for models like BERT that read a
+full sentence and need to understand it. But it's wrong for a **generative** model like
+GPT, where generation happens left-to-right and future tokens are genuinely unknown.
+
+**Causal masking** enforces the rule: token at position `t` may only attend to positions
+`0 … t`. The upper-right triangle of the attention matrix — all the "future" entries —
+gets zeroed out.
+
+## Two ways to zero the future
+
+We start from the attention weights produced by `SelfAttention_v2` from E04:
+
+```python cell
+import torch
+import torch.nn as nn
+
+inputs = torch.tensor(
+  [[0.43, 0.15, 0.89], [0.55, 0.87, 0.66], [0.57, 0.85, 0.64],
+   [0.22, 0.58, 0.33], [0.77, 0.25, 0.10], [0.05, 0.80, 0.55]]
+)
+
+torch.manual_seed(789)
+sa_v2 = SelfAttention_v2(d_in=3, d_out=2)
+
+queries = sa_v2.W_query(inputs)
+keys    = sa_v2.W_key(inputs)
+attn_scores  = queries @ keys.transpose(-2, -1)
+attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+print(attn_weights.round(decimals=4))
+```
+
+**Approach 1 — mask after softmax, then renormalize:**
+
+```python cell
+context_length = attn_scores.shape[0]
+mask = torch.tril(torch.ones(context_length, context_length))  # lower triangle
+masked = attn_weights * mask         # zero upper triangle
+row_sums = masked.sum(dim=-1, keepdim=True)
+masked_norm = masked / row_sums      # renormalize so each row sums to 1
+print(masked_norm.round(decimals=4))
+```
+
+**Approach 2 — mask with −∞ before softmax (the right way):**
+
+```python cell
+mask_upper = torch.triu(torch.ones(context_length, context_length), diagonal=1).bool()
+masked_scores = attn_scores.masked_fill(mask_upper, float('-inf'))
+attn_weights_causal = torch.softmax(masked_scores / keys.shape[-1]**0.5, dim=-1)
+print(attn_weights_causal.round(decimals=4))
+# Both approaches give identical numbers
+```
+
+Why −∞ and not 0? Because `e^(−∞) = 0` exactly. Setting future positions to 0 before
+softmax would give them `e^0 = 1` weight in the denominator — they'd still be attended
+to. Setting them to −∞ makes softmax assign them exactly 0 probability.
+
+Here is the full transformation, step by step:
+
+export const tokens = ["Your", "journ", "start", "with", "one", "step"]
+
+export const rawScores = [
+  [0.29, 0.47, 0.46, 0.26, 0.22, 0.34],
+  [0.47, 0.17, 0.17, 0.10, 0.09, 0.13],
+  [0.46, 0.17, 0.17, 0.10, 0.09, 0.13],
+  [0.26, 0.10, 0.10, 0.02, 0.06, 0.02],
+  [0.22, 0.09, 0.09, 0.06, 0.08, 0.01],
+  [0.34, 0.13, 0.13, 0.02, 0.01, 0.01],
+]
+
+export const maskGrid = [
+  [0, 1, 1, 1, 1, 1],
+  [0, 0, 1, 1, 1, 1],
+  [0, 0, 0, 1, 1, 1],
+  [0, 0, 0, 0, 1, 1],
+  [0, 0, 0, 0, 0, 1],
+  [0, 0, 0, 0, 0, 0],
+]
+
+export const causalWeights = [
+  [1.00, 0.00, 0.00, 0.00, 0.00, 0.00],
+  [0.55, 0.45, 0.00, 0.00, 0.00, 0.00],
+  [0.38, 0.31, 0.31, 0.00, 0.00, 0.00],
+  [0.28, 0.25, 0.25, 0.23, 0.00, 0.00],
+  [0.22, 0.20, 0.20, 0.19, 0.20, 0.00],
+  [0.19, 0.17, 0.17, 0.15, 0.17, 0.15],
+]
+
+<Scene autoPlayMs={2500}>
+  <Step caption="Step 1 — Full bidirectional attention scores. Every token sees every other token.">
+    <Matrix id="causal" values={rawScores} rowLabels={tokens} colLabels={tokens} colorScale="sequential" precision={2} />
+  </Step>
+  <Step caption="Step 2 — Upper-triangle mask: 1 marks a future position that must be blocked.">
+    <Matrix id="causal" values={maskGrid} rowLabels={tokens} colLabels={tokens} colorScale="sequential" precision={0} />
+  </Step>
+  <Step caption="Step 3 — Causal weights after softmax. Lower triangle only — the model is blind to the future.">
+    <Matrix id="causal" values={causalWeights} rowLabels={tokens} colLabels={tokens} colorScale="sequential" precision={2} />
+  </Step>
+</Scene>
+
+Notice row 0 ("Your"): `[1.0, 0, 0, 0, 0, 0]` — the first token can only attend to
+itself since there is nothing before it. Row 5 ("step"): unchanged from the original,
+because the last token is allowed to see everything.
+
+## Dropout on attention weights
+
+During training, we randomly zero out a fraction of the attention weights:
+
+```python cell
+torch.manual_seed(123)
+dropout = nn.Dropout(0.5)
+print(dropout(attn_weights_causal))
+```
+
+Each surviving weight is **scaled up by 1/(1−p) = 2** to keep the expected sum
+unchanged. At inference time, `dropout` becomes the identity — the full weight matrix
+is used unchanged. This prevents the model from over-relying on any single attention
+path, forcing it to develop multiple redundant routes to the same information.
+
+## CausalAttention — the complete module
+
+Everything so far — Q/K/V projections, scaling, masking, dropout — packaged into one
+clean `nn.Module` that also handles **batched** input:
+
+```python cell
+class CausalAttention(nn.Module):
+    def __init__(self, d_in, d_out, context_length, dropout, qkv_bias=False):
+        super().__init__()
+        self.d_out    = d_out
+        self.W_query  = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key    = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value  = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.dropout  = nn.Dropout(dropout)
+        # register_buffer: moves with the model to GPU, saved in state_dict,
+        # but NOT trained by the optimizer
+        self.register_buffer(
+            'mask',
+            torch.triu(torch.ones(context_length, context_length), diagonal=1)
+        )
+
+    def forward(self, x):
+        b, num_tokens, d_in = x.shape
+        queries = self.W_query(x)
+        keys    = self.W_key(x)
+        values  = self.W_value(x)
+
+        attn_scores = queries @ keys.transpose(1, 2)    # (b, T, T) — note .transpose not .T
+        attn_scores.masked_fill_(
+            self.mask.bool()[:num_tokens, :num_tokens], -torch.inf
+        )
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        return attn_weights @ values    # (b, T, d_out)
+
+batch = torch.stack((inputs, inputs), dim=0)    # (2, 6, 3)
+
+torch.manual_seed(123)
+ca = CausalAttention(d_in=3, d_out=2, context_length=6, dropout=0.0)
+context_vecs = ca(batch)
+print(context_vecs.shape)   # torch.Size([2, 6, 2])
+```
+
+Three things changed from `SelfAttention_v2` to handle the batch dimension:
+
+1. **`keys.transpose(1, 2)` not `keys.T`** — `.T` reverses *all* dimensions; we only
+   want to swap the last two while leaving the batch axis in place.
+2. **`register_buffer` for the mask** — not a learned parameter, but needs to move to
+   GPU with the model.
+3. **`masked_fill_` (in-place)** — saves a full copy of the scores tensor; semantically
+   identical to `masked_fill` but more memory-efficient inside `forward`.
+
+The output shape `(2, 6, 2)` — 2 batches, 6 tokens, 2-dim context vectors — is the
+contract the rest of the transformer stack depends on.
+
+Next: [Many heads, one matmul](/series/06-many-heads-one-matmul).

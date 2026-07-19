@@ -1,0 +1,128 @@
+---
+title: Our skeleton, their brain
+description: OpenAI released GPT-2's trained weights — we download them, reshape and rename them to match our architecture, copy them in, and immediately get coherent generation without any training.
+---
+
+We've trained our model on a short story. The results are decent but obviously limited.
+OpenAI trained the real GPT-2 for weeks on ~10 billion tokens of internet text and
+released the weights. This episode loads them into our model.
+
+## Why bother building from scratch if we're loading weights?
+
+Because understanding every parameter's shape and purpose is the only way to correctly
+map OpenAI's weights into our architecture. If you just called `from_pretrained`, you'd
+never know *why* Q/K/V are stored transposed, or why `h.0.attn.c_attn.weight` has shape
+`(768, 2304)` instead of `(2304, 768)`.
+
+## Downloading
+
+```python cell
+import urllib.request, os
+
+def download_and_load_gpt2(model_size, models_dir):
+    # model_size: "124M", "355M", "774M", or "1558M"
+    url  = f"https://openaipublic.blob.core.windows.net/gpt-2/models/{model_size}"
+    path = os.path.join(models_dir, model_size)
+    os.makedirs(path, exist_ok=True)
+
+    for fname in ["checkpoint", "encoder.json", "hparams.json",
+                  "model.ckpt.data-00000-of-00001", "model.ckpt.index",
+                  "model.ckpt.meta", "vocab.bpe"]:
+        fpath = os.path.join(path, fname)
+        if not os.path.exists(fpath):
+            urllib.request.urlretrieve(f"{url}/{fname}", fpath)
+
+    # Load weights via TensorFlow (OpenAI released as TF checkpoints)
+    import tensorflow as tf
+    ckpt_path = os.path.join(path, "model.ckpt")
+    settings  = json.load(open(os.path.join(path, "hparams.json")))
+    params    = {name: tf.train.load_variable(ckpt_path, name)
+                 for name, _ in tf.train.list_variables(ckpt_path)}
+    return settings, params
+
+settings, params = download_and_load_gpt2("124M", "gpt2")
+print("Settings:", settings)
+# {'n_vocab': 50257, 'n_ctx': 1024, 'n_embd': 768, 'n_head': 12, 'n_layer': 12}
+```
+
+## The weight mapping problem
+
+OpenAI's naming scheme differs from ours. Key differences:
+
+| OpenAI key | Our name | Notes |
+|---|---|---|
+| `wte` | `tok_emb.weight` | Token embedding — shape matches |
+| `wpe` | `pos_emb.weight` | Positional embedding — shape matches |
+| `h.0.attn.c_attn.weight` | W_query / W_key / W_value | OpenAI packs Q/K/V into one `(768, 2304)` matrix, stored **transposed** |
+| `h.0.ln_1.g` | `norm1.scale` | LayerNorm scale (γ) |
+| `h.0.mlp.c_fc.weight` | `ff.layers[0].weight` | FeedForward layer 1, also transposed |
+
+The transposition is the trickiest part: OpenAI's `nn.Linear` equivalent stores weights
+in `(in, out)` layout whereas PyTorch's `nn.Linear` stores them in `(out, in)` layout.
+Every weight matrix from OpenAI needs a `.T` before copying.
+
+## The assign helper
+
+```python cell
+def assign(left, right):
+    """Copy `right` into `left`, raising if shapes don't match."""
+    if left.shape != right.shape:
+        raise ValueError(f"Shape mismatch: {left.shape} vs {right.shape}")
+    return torch.nn.Parameter(torch.tensor(right))
+```
+
+The shape check is essential. A silent shape mismatch would produce wrong outputs
+with no error — the copy succeeds but the model silently uses garbage values.
+
+## Loading all weights
+
+```python cell
+def load_weights_into_gpt(gpt, params):
+    # Embeddings
+    gpt.tok_emb.weight = assign(gpt.tok_emb.weight, params['wte'])
+    gpt.pos_emb.weight = assign(gpt.pos_emb.weight, params['wpe'])
+
+    for b in range(len(gpt.trf_blocks)):
+        h = params['h'][b]
+
+        # Q, K, V combined weight: (768, 2304) — split into 3 × (768, 768)
+        W_qkv = h['attn']['c_attn']['w'][0]     # (768, 2304)
+        q_w, k_w, v_w = np.split(W_qkv, 3, axis=-1)  # each (768, 768)
+        gpt.trf_blocks[b].att.W_query.weight = assign(
+            gpt.trf_blocks[b].att.W_query.weight, q_w.T)
+        gpt.trf_blocks[b].att.W_key.weight   = assign(
+            gpt.trf_blocks[b].att.W_key.weight,   k_w.T)
+        gpt.trf_blocks[b].att.W_value.weight = assign(
+            gpt.trf_blocks[b].att.W_value.weight, v_w.T)
+
+        # ... (biases, out_proj, LayerNorm, FeedForward follow the same pattern)
+
+    # Weight tying: share token embedding with output head
+    gpt.out_head.weight = gpt.tok_emb.weight
+
+load_weights_into_gpt(gpt, params)
+gpt.eval()
+```
+
+## Coherent generation — immediately
+
+```python cell
+import tiktoken
+tokenizer = tiktoken.get_encoding("gpt2")
+
+token_ids = generate(
+    gpt,
+    text_to_token_ids("Every effort moves you", tokenizer),
+    max_new_tokens=25, context_size=1024,
+    top_k=50, temperature=0.7
+)
+print(token_ids_to_text(token_ids, tokenizer))
+# "Every effort moves you forward. The key is to focus on what you can control,
+#  not what you can't. That's the only way to..."
+```
+
+After one `load_weights_into_gpt` call and no training, the model produces coherent
+English — because those 124M parameters already encode the statistical patterns of
+billions of words of internet text. This is the power of pretrained weights.
+
+Next: [From generator to classifier — finetuning for sentiment](/series/14-from-generator-to-classifier).

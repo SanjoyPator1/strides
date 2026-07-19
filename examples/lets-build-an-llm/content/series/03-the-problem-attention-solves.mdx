@@ -1,0 +1,285 @@
+---
+title: The problem attention solves
+description: A fixed per-word embedding is context-blind — attention fixes that by letting every token look at every other and decide how relevant each one is.
+---
+
+The embeddings we built in the last episode are **static**. Token ID `7002` always maps
+to the same 768-dimensional vector, no matter where in the sentence it appears, and no
+matter which words surround it.
+
+That's a fundamental problem. The word `"bank"` in `"river bank"` and `"bank account"`
+are completely different concepts, but a plain embedding table gives them the identical
+vector. The model has no way to pick the right meaning without looking at context.
+
+**Attention** is the mechanism that fixes this. Every token gets to look at every other
+token in the sequence and ask: *how relevant are you to me, right now, in this sentence?*
+The answers become a weighted mix — a **context vector** — that carries both the token's
+own meaning *and* a blend of its neighbors', weighted by relevance.
+
+This episode builds attention from the ground up, no trainable weights yet, just dot
+products and softmax, so you can see exactly what's happening before any learning is
+involved.
+
+## The toy example
+
+We'll use the same 6-token sentence throughout this episode — and throughout the rest of
+this series, all the way through causal masking and multi-head attention:
+
+```python cell
+import torch
+
+inputs = torch.tensor(
+  [[0.43, 0.15, 0.89],  # Your     (x¹)
+   [0.55, 0.87, 0.66],  # journey  (x²)
+   [0.57, 0.85, 0.64],  # starts   (x³)
+   [0.22, 0.58, 0.33],  # with     (x⁴)
+   [0.77, 0.25, 0.10],  # one      (x⁵)
+   [0.05, 0.80, 0.55]]  # step     (x⁶)
+)
+print("inputs.shape:", inputs.shape)
+```
+
+Six tokens, each a 3-dimensional embedding. In a real GPT model these would be 768
+dimensions — kept at 3 here so every number can be traced by hand.
+
+## Step 1 — dot product as similarity
+
+We'll compute a context vector for `"journey"` (index 1, `x²`). The question: how
+similar is `"journey"` to every other word in the sentence?
+
+The tool we use is the **dot product**. Two vectors that point in the same general
+direction have a large dot product; two that point in opposite directions have a negative
+one. "Same direction" is a proxy for "semantically related, at least as these random
+embeddings happen to be oriented."
+
+Let's trace the very first one by hand: `"journey"` vs `"Your"`:
+
+```
+ω₂₁ = (0.55 × 0.43) + (0.87 × 0.15) + (0.66 × 0.89)
+     = 0.2365 + 0.1305 + 0.5874
+     = 0.9544
+```
+
+Now compute all six scores at once:
+
+```python cell
+query = inputs[1]  # "journey"
+
+attn_scores_2 = torch.empty(inputs.shape[0])
+for i, x_i in enumerate(inputs):
+    attn_scores_2[i] = torch.dot(x_i, query)
+
+print(attn_scores_2)
+```
+
+The output `[0.9544, 1.4950, 1.4754, 0.8434, 0.7070, 1.0865]` maps back to the sentence like this:
+
+export const tokens = ["Your", "journey", "starts", "with", "one", "step"]
+
+export const rawScoreRow = [
+  [0.9544],
+  [1.4950],
+  [1.4754],
+  [0.8434],
+  [0.7070],
+  [1.0865],
+]
+
+<Matrix
+  values={rawScoreRow}
+  rowLabels={tokens}
+  colLabels={["score vs. journey"]}
+  colorScale="sequential"
+  precision={4}
+/>
+
+The highest score (1.4950) is `"journey"` vs itself — a vector is perfectly aligned with
+itself. The second highest (1.4754) is `"starts"` — the two vectors happen to point in
+similar directions in this random embedding. "One" and "with" score lowest.
+
+## Step 2 — why softmax (not just divide)?
+
+Raw dot products can be any real number — positive, negative, large, small. To use them
+as **blend weights** they need to:
+
+1. All be positive (you can't take -30% of a word vector meaningfully)
+2. Sum to exactly 1 (so the result is a true weighted average)
+
+**Naive option — divide by the sum:**
+
+```python cell
+attn_weights_naive = attn_scores_2 / attn_scores_2.sum()
+print("naive:", attn_weights_naive)
+print("sum:", attn_weights_naive.sum())
+```
+
+This works when all scores happen to be positive. But if any score were negative, dividing
+by the sum would produce negative weights, which makes no sense as a blend ratio.
+
+**Softmax — always positive, differentiable, stable:**
+
+```python cell
+def softmax_naive(x):
+    return torch.exp(x) / torch.exp(x).sum(dim=0)
+
+attn_weights_2 = torch.softmax(attn_scores_2, dim=0)
+print("softmax:", attn_weights_2)
+print("sum:", attn_weights_2.sum())
+```
+
+Because `e^x` is always positive for any real `x`, softmax guarantees every weight lands
+in `(0, 1)` even if the raw scores go negative. The exponential also makes softmax
+*sharper* than plain division — large scores get amplified more, making the distribution
+more decisive. And softmax is differentiable everywhere, which matters once these weights
+are produced by a learnable network.
+
+export const softmaxWeights = [
+  [0.1385],
+  [0.2379],
+  [0.2333],
+  [0.1240],
+  [0.1082],
+  [0.1581],
+]
+
+export const rawScoresFull = [
+  [0.9544],
+  [1.4950],
+  [1.4754],
+  [0.8434],
+  [0.7070],
+  [1.0865],
+]
+
+<Scene>
+  <Step caption="Raw dot-product scores — 'journey' vs every token. Can be any value.">
+    <Matrix
+      id="scores-to-weights"
+      values={rawScoresFull}
+      rowLabels={tokens}
+      colLabels={["raw score"]}
+      colorScale="sequential"
+      precision={4}
+    />
+  </Step>
+  <Step caption="After softmax — all positive, sum to 1. Now these are blend weights.">
+    <Matrix
+      id="scores-to-weights"
+      values={softmaxWeights}
+      rowLabels={tokens}
+      colLabels={["attention weight"]}
+      colorScale="sequential"
+      precision={4}
+    />
+  </Step>
+</Scene>
+
+`"journey"` contributes most to its own context vector (0.2379), followed closely by
+`"starts"` (0.2333). These two dominate the blend; every other word has a smaller voice.
+
+## Step 3 — the context vector
+
+With weights in hand, compute the context vector for `"journey"`: a weighted sum of all
+six input vectors, using the attention weights as mixing coefficients.
+
+**By hand, for just the first dimension:**
+
+```
+z²_dim0 = 0.1385×0.43 + 0.2379×0.55 + 0.2333×0.57
+         + 0.1240×0.22 + 0.1082×0.77 + 0.1581×0.05
+         = 0.0596 + 0.1308 + 0.1330 + 0.0273 + 0.0833 + 0.0079
+         = 0.4419
+```
+
+```python cell
+context_vec_2 = torch.zeros(query.shape)
+for i, x_i in enumerate(inputs):
+    context_vec_2 += attn_weights_2[i] * x_i
+
+print("Original 'journey' embedding:", inputs[1].tolist())
+print("Context-aware 'journey' vector:", context_vec_2.tolist())
+```
+
+The original embedding was `[0.55, 0.87, 0.66]`. The context vector is
+`[0.4419, 0.6515, 0.5683]` — a blend dominated by `"journey"` and `"starts"`,
+with smaller contributions from every other word. It still *represents* `"journey"`,
+but it's been enriched by the sentence's context.
+
+## Step 4 — one matmul for all tokens
+
+So far we computed one context vector (for `"journey"`). A real attention layer computes
+one for **every** token simultaneously. The naive approach is a nested loop — ask each
+token "how do you relate to everyone else?" six times.
+
+The key insight: all 36 dot products — every token against every token — are just
+one matrix multiplication:
+
+```python cell
+# Slow: nested loop
+attn_scores = torch.empty(6, 6)
+for i, x_i in enumerate(inputs):
+    for j, x_j in enumerate(inputs):
+        attn_scores[i, j] = torch.dot(x_i, x_j)
+
+# Fast: one matmul — identical result
+attn_scores_matmul = inputs @ inputs.T
+print("Results match:", torch.allclose(attn_scores, attn_scores_matmul))
+print(attn_scores.round(decimals=4))
+```
+
+Row 1 (index 1, 0-based) of this 6×6 matrix is exactly `attn_scores_2` from
+Step 1 — the matmul computes all six rows of that calculation in parallel.
+
+Now softmax every row independently, and compute all context vectors in one more matmul:
+
+```python cell
+attn_weights = torch.softmax(attn_scores, dim=-1)  # dim=-1 = across each row
+print("All row sums:", attn_weights.sum(dim=-1))
+
+all_context_vecs = attn_weights @ inputs
+print(all_context_vecs)
+
+# Row 1 should match context_vec_2 from the loop above
+print("\nMatch:", torch.allclose(all_context_vecs[1], context_vec_2))
+```
+
+`dim=-1` (not `dim=0`) is critical here: the 6×6 scores matrix is square, so applying
+softmax down the columns instead of across the rows is easy to get wrong and never changes
+the shape — the semantics would be completely broken but the code wouldn't crash. Each row
+is one token's distribution over "how much do I attend to each position?", and that
+distribution must sum to 1 across columns.
+
+Here is the full 6×6 attention weight matrix, now interactive — hover any cell to see
+exactly how much a query token (row) attends to a key token (column):
+
+export const allAttnWeights = [
+  [0.2098, 0.2006, 0.1981, 0.1242, 0.1220, 0.1452],
+  [0.1385, 0.2379, 0.2333, 0.1240, 0.1082, 0.1581],
+  [0.1390, 0.2369, 0.2326, 0.1242, 0.1108, 0.1565],
+  [0.1435, 0.2074, 0.2046, 0.1462, 0.1263, 0.1720],
+  [0.1526, 0.1958, 0.1975, 0.1367, 0.1879, 0.1295],
+  [0.1385, 0.2184, 0.2128, 0.1420, 0.0988, 0.1896],
+]
+
+<AttentionHeatmap weights={allAttnWeights} tokens={tokens} />
+
+Every row sums to 1 — each token has its own probability distribution over all six
+positions. The diagonal is always one of the brighter cells (a token attends to itself
+most), but every token gets some weight from everyone.
+
+Three matmuls total for the whole attention operation:
+- `inputs @ inputs.T` → raw scores (6×6)
+- `softmax(scores, dim=-1)` → weights (6×6)
+- `weights @ inputs` → context vectors (6×3)
+
+This is attention with **no trainable parameters**. The entire computation is driven by
+the geometry of the raw input embeddings — which means the model has no way to *learn*
+what "relevant" means. Every token is being compared to every other token purely as-is,
+with no learned notion of what to look for.
+
+That limitation is the setup for the next episode. We'll fix it by introducing three
+trainable projection matrices — **queries, keys, and values** — so the model can learn
+its own notion of relevance, rather than being stuck with whatever direction the input
+embeddings happen to point.
+
+Next: [Queries, Keys, Values](/series/04-queries-keys-values).

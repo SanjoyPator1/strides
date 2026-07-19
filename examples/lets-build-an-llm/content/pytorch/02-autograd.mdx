@@ -1,0 +1,78 @@
+---
+title: Autograd
+description: How PyTorch automatically calculates gradients so you never have to write calculus by hand.
+---
+
+Training a neural network requires knowing how a small change in any weight affects the
+final loss. Doing this by hand requires calculus (the chain rule) and gets impossibly
+complicated for deep networks.
+
+PyTorch solves this with **Autograd**.
+
+## The computation graph
+
+When you do math on PyTorch tensors that have `requires_grad=True`, PyTorch doesn't
+just compute the answer — it builds a graph of the operations used to get there.
+
+```python cell
+import torch
+
+# A weight we want to train
+w = torch.tensor(2.0, requires_grad=True)
+
+# Some math
+y = w * w + 5
+print(y)
+# tensor(9., grad_fn=<AddBackward0>)
+```
+
+Notice the `grad_fn`. `y` remembers that it was created by an addition operation,
+which remembers its inputs were 5 and the result of a multiplication, which remembers
+its input was `w`.
+
+## .backward()
+
+When you call `.backward()` on a scalar (like a loss), PyTorch traverses that graph
+backwards, applying the chain rule automatically.
+
+```python cell
+y.backward()
+
+# dy/dw = 2w = 2(2) = 4
+print(w.grad)
+# tensor(4.)
+```
+
+The gradient is deposited in the `.grad` attribute of the original tensor. This tells
+the optimizer exactly how to change `w` to decrease the loss.
+
+## zero_grad()
+
+PyTorch *accumulates* gradients by default. If you call `.backward()` again, the new
+gradients will be added to the old ones.
+
+```python cell
+y = w * w + 5
+y.backward()
+print(w.grad)
+# tensor(8.)  <-- 4 + 4! Wrong!
+```
+
+This is why every PyTorch training loop starts with `optimizer.zero_grad()` to clear
+out the old gradients before computing new ones.
+
+## torch.no_grad()
+
+Building the computation graph takes memory and time. When you are just generating
+text or evaluating the model, you don't need gradients.
+
+You can wrap that code in a `torch.no_grad()` context block to tell PyTorch to skip
+building the graph, saving massive amounts of memory:
+
+```python cell
+with torch.no_grad():
+    y = w * w + 5
+    print(y.requires_grad)  # False
+```
+
+We use this in every `generate` and `evaluate` function in the series.
