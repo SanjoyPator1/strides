@@ -8,7 +8,7 @@ import { syncSnapshotAssets } from '../sync-assets'
 export async function runDevCommand(cwd: string = process.cwd()): Promise<void> {
   const config = await loadStridesConfig(cwd)
   syncSnapshotAssets(cwd, config.snapshotDir)
-  const nextPort = await getFreePort()
+  const nextPort = await getFreePort(3000)
   const nextOrigin = `http://localhost:${nextPort}`
 
   let gateway: KernelGatewayHandle | null = null
@@ -19,7 +19,7 @@ export async function runDevCommand(cwd: string = process.cwd()): Promise<void> 
     console.warn(`strides: ${preflight.error}`)
     console.warn('strides: continuing without a kernel — cells will be read-only.')
   } else {
-    const gatewayPort = await getFreePort()
+    const gatewayPort = await getFreePort(8888)
     gateway = spawnKernelGateway({ pythonPath: preflight.pythonPath, port: gatewayPort, corsOrigin: nextOrigin, cwd })
     try {
       await waitForGatewayReady(gateway.url)
