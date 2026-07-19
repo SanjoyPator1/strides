@@ -49,6 +49,7 @@ strides embraces that constraint: **execution is local-only, publishing freezes 
 | 7 | 2026-07-16 | No in-browser cell editing | Authors edit MDX in their editor; hot reload covers iteration. Removes an entire editor subsystem from scope |
 | 8 | 2026-07-16 | Snapshot format: one JSON per page, deterministic ordering, images as separate files, env metadata embedded | Reviewable diffs; "works on my machine" is diagnosable |
 | 9 | 2026-07-16 | Python environments managed with **uv** (`pyproject.toml` + committed `uv.lock`); the framework itself depends only on a venv path (default `.venv`) | Frozen outputs are only reproducible with locked deps; uv creates `.venv` by default, so CLI python resolution stays package-manager-agnostic |
+| 10 | 2026-07-19 | Reverses #7 — **in-browser cell editing added** (`updateCellCode` on `KernelContextValue`; `PyCellClient` renders an editable `<textarea>` instead of the static Shiki-highlighted view whenever a kernel is connected) | Requested explicitly for the `lets-build-an-llm` series so viewers/authors can experiment against a live kernel without touching the `.mdx` file. Scope kept deliberately small: plain textarea, no syntax highlighting while editing, no write-back to the source file — edits are session-only against the live kernel. Published (no-kernel) pages are unaffected and stay fully static |
 
 ## Non-goals (v1)
 

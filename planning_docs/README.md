@@ -11,6 +11,7 @@ Numbered design and implementation documents for strides. Each doc states its st
 | 05 | [Implementation status](05-implementation-status.md) | Living progress tracker — updated as phases complete |
 | 06 | [Visualization components log](06-visualization-components-log.md) | Build log for the visualization component library — what got built, bugs found and fixed, current state |
 | 07 | [Productize POC 3 & 4 handoff](07-productize-poc3-poc4-handoff.md) | Self-contained work order for finishing `TensorDive` + `BracketDiagram` in `@strides/viz` — what's done, what remains, full specs, conventions, acceptance checklist |
+| 08 | ["Let's Build an LLM" YouTube series plan](08-llm-from-scratch-youtube-series-plan.md) | Content plan (not a script) for the YouTube series built from `rough/` — narrative spine, per-episode teaching outline, companion-site layout, viz gaps, production workflow |
 
 Conventions:
 
