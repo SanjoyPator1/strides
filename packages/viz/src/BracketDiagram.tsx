@@ -9,8 +9,8 @@ export interface BracketAnnotation {
   /** Index constraints, one per dimension; null = any index. E.g. [0, null, 0, null] = "head 0's slots in batch 0". */
   target: (number | null)[]
   label: string
-  /** Where the label sits: 'left' = the gutter beside the body, 'above' = the band under the legend. */
-  side?: 'left' | 'above'
+  /** Where the label sits: 'left' = the gutter beside the body, 'above' = the band under the legend, 'right' = right of diagram. */
+  side?: 'left' | 'above' | 'right'
   color?: string
 }
 
@@ -278,13 +278,21 @@ export function layoutBracket(props: BracketDiagramProps): BracketLayout {
         arrow: { x1: 190, y1: cy + 34, x2: x1 - 6, y2: cy + 6 },
         color, seed: 31 + ai * 13,
       })
+    } else if (ann.side === 'right') {
+      scribbles.push({
+        ellipse: { cx, cy, rx: (x2 - x1) / 2 + 16, ry: LH * 0.62 * Math.max(1, (y2 - y1) / LH) },
+        labelLines: [{ x: Math.min(x2 + 40, VIEW_W - 150), y: cy, text: ann.label }],
+        arrow: { x1: Math.min(x2 + 40, VIEW_W - 150) - 10, y1: cy, x2: x2 + 10, y2: cy },
+        color, seed: 11 + ai * 13,
+      })
     } else {
+      // 'above'
       const lx = Math.min(560 + ai * 30, VIEW_W - 420)
       const ly = 128 + ai * 22
       scribbles.push({
         ellipse: { cx, cy, rx: (x2 - x1) / 2 + 16, ry: LH * 0.62 * Math.max(1, (y2 - y1) / LH) },
         labelLines: [{ x: lx, y: ly, text: ann.label }],
-        arrow: { x1: lx + 8, y1: ly + 12, x2: x2 + 28, y2: cy - 6 },
+        arrow: { x1: lx + 20, y1: ly + 8, x2: cx + (ai % 2 === 0 ? 15 : -15), y2: y1 - 8 },
         color, seed: 11 + ai * 13,
       })
     }

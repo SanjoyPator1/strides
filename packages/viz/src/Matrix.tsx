@@ -6,6 +6,48 @@ import { useColorScale, type ColorScaleKind } from './color-scale'
 import { useAnimatedNumber } from './animated-number'
 import { useAnchorRef } from './Arrow'
 
+/**
+ * Given any CSS color string (hex #rrggbb / #rgb, or rgb(r,g,b)), return
+ * '#ffffff' when the background is dark enough to need white text, or
+ * '#111827' (near-black) when it is light enough for dark text.
+ * Uses the WCAG relative-luminance formula with a threshold of 0.35.
+ */
+function contrastColor(bg: string): string {
+  let r = 0, g = 0, b = 0
+
+  const hex6 = bg.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i)
+  if (hex6) {
+    r = parseInt(hex6[1], 16)
+    g = parseInt(hex6[2], 16)
+    b = parseInt(hex6[3], 16)
+  } else {
+    const hex3 = bg.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i)
+    if (hex3) {
+      r = parseInt(hex3[1] + hex3[1], 16)
+      g = parseInt(hex3[2] + hex3[2], 16)
+      b = parseInt(hex3[3] + hex3[3], 16)
+    } else {
+      const rgb = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i)
+      if (rgb) {
+        r = parseInt(rgb[1], 10)
+        g = parseInt(rgb[2], 10)
+        b = parseInt(rgb[3], 10)
+      } else {
+        // Unknown format — fall back to dark text
+        return '#111827'
+      }
+    }
+  }
+
+  // WCAG relative luminance
+  const toLinear = (c: number) => {
+    const s = c / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b)
+  return L < 0.35 ? '#ffffff' : '#111827'
+}
+
 export interface MatrixHoverCell {
   row: number
   col: number
@@ -115,7 +157,14 @@ function MatrixCell({ row, col, value, x, y, size, color, precision, highlighted
         animate={{ fill: color }}
         transition={{ duration: 0.35 }}
       />
-      <text x={x + size / 2} y={y + size / 2} textAnchor="middle" dominantBaseline="middle" className="strides-matrix-value">
+      <text
+        x={x + size / 2}
+        y={y + size / 2}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        className="strides-matrix-value"
+        style={{ fill: contrastColor(color) }}
+      >
         {label ?? displayValue.toFixed(precision)}
       </text>
     </g>
